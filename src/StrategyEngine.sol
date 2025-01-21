@@ -160,6 +160,7 @@ contract StrategyEngine is
         });
 
         // Transfer USDC cross-chain using Wormhole CCTP
+        // 将借出的USDC转到Solana个人钱包
         wormholeCCTP.transferTokensWithPayload(
             transferParams,
             0, // batchId
