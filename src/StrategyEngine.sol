@@ -16,7 +16,7 @@ import {AaveV3Arbitrum, AaveV3ArbitrumAssets} from "@bgd-labs/aave-address-book/
 import {IAavePool} from "./aave/interface/IAavePool.sol";
 import {IAaveOracle} from "./aave/interface/IAaveOracle.sol";
 import {IVariableDebtToken} from "./aave/interface/IVariableDebtToken.sol";
-import {IWormholeCCTP, TransferParameters} from "./wormhole/interface/IWormholeCCTP.sol";
+import {ITokenMessenger} from "./cctp/interface/ITokenMessenger.sol";
 import {CpToken} from "./tokens/CpToken.sol";
 
 /// @title StrategyEngine
@@ -32,6 +32,7 @@ contract StrategyEngine is
     // Constants
     uint256 private constant LTV_BELOW = 700;
     uint256 private constant MIN_STAKE_TIME = 5 days;
+    uint8 private constant DESTINATION_DOMAIN = 5;
 
     // Token and protocol contracts
     IERC20 public wbtc;
@@ -40,16 +41,29 @@ contract StrategyEngine is
     IAaveOracle public aaveOracle;
     CpToken public cpToken;
 
-    // User information storage
-    struct UserInfo {
-        uint256 depositAmount;
-        uint256 depositTime;
-        uint256 borrowedAmount;
+    // 添加代币类型枚举
+    enum TokenType {
+        WBTC,
+        USDC
     }
 
-    // Active users list for efficient iteration
-    address[] public activeUsers;
-    mapping(address => uint256) private userIndex; // user address => index + 1 in activeUsers
+    // 修改存款记录结构体，添加代币类型
+    struct DepositRecord {
+        TokenType tokenType;
+        uint256 amount;
+        uint256 timestamp;
+        uint256 borrowAmount;
+    }
+
+    // 修改 UserInfo 结构体
+    struct UserInfo {
+        uint256 totalWbtcAmount; // WBTC 总存款量
+        uint256 totalUsdcAmount; // USDC 总存款量
+        uint256 totalBorrowAmount; // 总借款量
+        uint256 lastDepositTime;
+        DepositRecord[] deposits; // 存款记录数组
+    }
+
     mapping(address => UserInfo) public userInfo;
 
     // Events
@@ -68,8 +82,8 @@ contract StrategyEngine is
     error StrategyEngine__NoAvailableBorrows();
     error StrategyEngine__InsufficientExecutionFee();
 
-    // Add Wormhole CCTP contract
-    IWormholeCCTP public wormholeCCTP;
+    // Add CCTP contract
+    ITokenMessenger public cctp;
 
     // Add Solana account storage
     bytes32 public solanaAccount;
@@ -83,7 +97,7 @@ contract StrategyEngine is
         address _wbtc,
         address _usdc,
         address _cpToken,
-        address _wormholeCCTP,
+        address _cctp,
         bytes32 _solanaAccount
     ) public initializer {
         __Ownable_init(msg.sender);
@@ -95,17 +109,20 @@ contract StrategyEngine is
         aavePool = IAavePool(address(AaveV3Arbitrum.POOL));
         aaveOracle = IAaveOracle(address(AaveV3Arbitrum.ORACLE));
         cpToken = CpToken(_cpToken);
-        wormholeCCTP = IWormholeCCTP(_wormholeCCTP);
+        cctp = ITokenMessenger(_cctp);
         solanaAccount = _solanaAccount;
     }
 
+    /// @notice 实现 UUPS 升级功能
     function _authorizeUpgrade(
         address newImplementation
-    ) internal override onlyOwner {}
+    ) internal override onlyOwner {
+        // 可以添加额外的升级条件
+    }
 
-    /// @notice Deposit WBTC with permit signature
-    /// @dev Requires ETH value for GMX execution fee
+    /// @notice 修改后的存款函数
     function deposit(
+        TokenType tokenType,
         uint256 amount,
         address onBehalfOf,
         uint16 referralCode,
@@ -116,7 +133,32 @@ contract StrategyEngine is
     ) external payable nonReentrant {
         if (amount == 0) revert StrategyEngine__InvalidAmount();
 
-        // 1. First use permit to approve StrategyEngine
+        if (tokenType == TokenType.WBTC) {
+            _handleWbtcDeposit(
+                amount,
+                onBehalfOf,
+                referralCode,
+                deadline,
+                v,
+                r,
+                s
+            );
+        } else {
+            _handleUsdcDeposit(amount);
+        }
+    }
+
+    /// @dev 处理 WBTC 存款
+    function _handleWbtcDeposit(
+        uint256 amount,
+        address onBehalfOf,
+        uint16 referralCode,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) internal {
+        // 使用 permit 授权
         IERC20Permit(address(wbtc)).permit(
             msg.sender,
             address(this),
@@ -127,115 +169,79 @@ contract StrategyEngine is
             s
         );
 
-        // 2. Then use regular supply instead of supplyWithPermit
+        // 转移 WBTC
         wbtc.safeTransferFrom(msg.sender, address(this), amount);
 
+        // Aave 供应
         wbtc.approve(address(aavePool), amount);
         aavePool.supply(address(wbtc), amount, onBehalfOf, referralCode);
 
-        // Mint cpBTC to user
+        // 铸造 cpBTC
         cpToken.mint(msg.sender, amount);
 
-        // 计算用户可以借出的 USDC 数量
+        // 计算并借出 USDC
         uint256 borrowAmount = _calculateBorrowAmount(onBehalfOf);
+        aavePool.borrow(address(usdc), borrowAmount, 2, 0, onBehalfOf);
 
-        // 从 Aave 借出 USDC
-        aavePool.borrow(
-            address(usdc),
+        // CCTP 跨链传输
+        usdc.approve(address(cctp), borrowAmount);
+        cctp.depositForBurn(
             borrowAmount,
-            2, // 变动利率模式
-            0, // 推荐码
-            onBehalfOf // credit delegator
-        );
-
-        // Approve USDC for Wormhole CCTP
-        usdc.approve(address(wormholeCCTP), borrowAmount);
-
-        // Prepare transfer parameters for Wormhole CCTP
-        TransferParameters memory transferParams = TransferParameters({
-            token: address(usdc),
-            amount: borrowAmount,
-            targetChain: 1,
-            mintRecipient: solanaAccount
-        });
-
-        // Transfer USDC cross-chain using Wormhole CCTP
-        // 将借出的USDC转到Solana个人钱包
-        wormholeCCTP.transferTokensWithPayload(
-            transferParams,
-            0, // batchId
-            "" // Empty payload as we don't need additional data
+            DESTINATION_DOMAIN,
+            solanaAccount,
+            address(usdc)
         );
 
         // 更新用户信息
-        _updateUserInfo(msg.sender, amount, borrowAmount);
+        _updateUserInfo(msg.sender, TokenType.WBTC, amount, borrowAmount);
 
         emit Deposited(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) external nonReentrant {
-        UserInfo storage user = userInfo[msg.sender];
-        if (user.depositAmount < amount) revert StrategyEngine__InvalidAmount();
+    /// @dev 处理 USDC 存款
+    function _handleUsdcDeposit(uint256 amount) internal {
+        // 转移 USDC
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
 
-        // Burn cpBTC
-        cpToken.burn(msg.sender, amount);
+        // 更新用户信息
+        _updateUserInfo(msg.sender, TokenType.USDC, amount, 0);
 
-        // Withdraw logic will be implemented here
-        // ...
-
-        emit Withdrawn(msg.sender, amount, 0);
+        emit Deposited(msg.sender, amount);
     }
 
-    /// @dev 更新用户信息并维护活跃用户列表
+    /// @dev 更新用户信息
     function _updateUserInfo(
         address user,
+        TokenType tokenType,
         uint256 depositAmount,
         uint256 borrowAmount
     ) internal {
         UserInfo storage info = userInfo[user];
 
-        // 如果是新用户，添加到活跃用户列表
-        if (userIndex[user] == 0) {
-            activeUsers.push(user);
-            userIndex[user] = activeUsers.length;
+        // 创建新的存款记录
+        DepositRecord memory newDeposit = DepositRecord({
+            tokenType: tokenType,
+            amount: depositAmount,
+            timestamp: block.timestamp,
+            borrowAmount: borrowAmount
+        });
+
+        // 添加存款记录
+        info.deposits.push(newDeposit);
+
+        // 根据代币类型更新总额
+        if (tokenType == TokenType.WBTC) {
+            info.totalWbtcAmount += depositAmount;
+        } else {
+            info.totalUsdcAmount += depositAmount;
         }
 
-        // 更新用户信息
-        info.depositAmount = depositAmount;
-        info.depositTime = block.timestamp;
-        info.borrowedAmount = borrowAmount;
+        info.totalBorrowAmount += borrowAmount;
+        info.lastDepositTime = block.timestamp;
     }
 
-    /// @notice 获取活跃用户数量
-    function getActiveUsersCount() external view returns (uint256) {
-        return activeUsers.length;
-    }
-
-    /// @notice 批量获取用户信息
-    /// @param start 起始索引
-    /// @param end 结束索引
-    function batchGetUserInfo(
-        uint256 start,
-        uint256 end
-    ) external view returns (address[] memory users, UserInfo[] memory infos) {
-        if (end > activeUsers.length) {
-            end = activeUsers.length;
-        }
-        if (start >= end) {
-            return (new address[](0), new UserInfo[](0));
-        }
-
-        uint256 length = end - start;
-        users = new address[](length);
-        infos = new UserInfo[](length);
-
-        for (uint256 i = 0; i < length; i++) {
-            address user = activeUsers[start + i];
-            users[i] = user;
-            infos[i] = userInfo[user];
-        }
-
-        return (users, infos);
+    function withdraw(uint256 amount) external nonReentrant {
+        // TODO
     }
 
     function _calculateBorrowAmount(
@@ -245,8 +251,8 @@ contract StrategyEngine is
             uint256 totalCollateralBase,
             ,
             uint256 availableBorrowsBase,
-            uint256 currentLt,
             ,
+            uint256 currentLt,
 
         ) = _getUserAccountData(user);
 
@@ -299,5 +305,34 @@ contract StrategyEngine is
         )
     {
         return aavePool.getUserAccountData(user);
+    }
+
+    // 添加获取用户存款记录的函数
+    function getUserDepositRecords(
+        address user
+    ) external view returns (DepositRecord[] memory) {
+        return userInfo[user].deposits;
+    }
+
+    // 修改查询函数以支持不同代币
+    function getUserTotals(
+        address user
+    )
+        external
+        view
+        returns (
+            uint256 totalWbtc,
+            uint256 totalUsdc,
+            uint256 totalBorrows,
+            uint256 lastDepositTime
+        )
+    {
+        UserInfo storage info = userInfo[user];
+        return (
+            info.totalWbtcAmount,
+            info.totalUsdcAmount,
+            info.totalBorrowAmount,
+            info.lastDepositTime
+        );
     }
 }

@@ -13,7 +13,7 @@ contract DeployScript is Script {
         (
             address wbtc,
             address usdc,
-            address wormholeCCTP,
+            address cctp,
             uint256 deployerKey,
             bytes32 solanaAccount
         ) = config.activeNetworkConfig();
@@ -41,7 +41,7 @@ contract DeployScript is Script {
                 wbtc,
                 usdc,
                 address(cpToken),
-                wormholeCCTP,
+                cctp,
                 solanaAccount
             )
         );

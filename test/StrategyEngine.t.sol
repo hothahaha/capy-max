@@ -7,7 +7,6 @@ import {IERC20Permit} from "@chainlink/contracts/src/v0.8/vendor/openzeppelin-so
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {AaveV3Arbitrum, AaveV3ArbitrumAssets} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
 
-import {MockERC20} from "../src/erc20/MockERC20.sol";
 import {IAavePool} from "../src/aave/interface/IAavePool.sol";
 import {IPoolDataProvider} from "../src/aave/interface/IAaveProtocolDataProvider.sol";
 import {IVariableDebtToken} from "../src/aave/interface/IVariableDebtToken.sol";
@@ -71,6 +70,7 @@ contract StrategyEngineTest is Test {
         _approveDelegation(usdc, USER, type(uint256).max);
 
         engine.deposit{value: GMX_EXECUTION_FEE}(
+            StrategyEngine.TokenType.WBTC,
             amount,
             USER,
             0, // referralCode
@@ -83,12 +83,9 @@ contract StrategyEngineTest is Test {
         vm.stopPrank();
 
         // Verify deposit
-        (uint256 depositAmount, , ) = engine.userInfo(USER);
-        assertEq(depositAmount, amount, "Incorrect deposit amount");
-
-        // Verify user is in active users list
-        address[] memory users = _getActiveUsers(0, 1);
-        assertEq(users[0], USER, "User not added to active users");
+        (uint256 totalWbtc, uint256 totalUsdc, , ) = engine.userInfo(USER);
+        assertEq(totalWbtc, amount, "Incorrect total WBTC amount");
+        assertEq(totalUsdc, 0, "Incorrect total USDC amount");
     }
 
     // Helper functions
@@ -120,14 +117,6 @@ contract StrategyEngineTest is Test {
 
         // Generate signature
         (v, r, s) = vm.sign(privateKey, digest);
-    }
-
-    function _getActiveUsers(
-        uint256 start,
-        uint256 end
-    ) internal view returns (address[] memory) {
-        (address[] memory users, ) = engine.batchGetUserInfo(start, end);
-        return users;
     }
 
     function _approveDelegation(

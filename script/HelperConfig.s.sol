@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {MockERC20} from "../src/erc20/MockERC20.sol";
 import {Script, console2} from "forge-std/Script.sol";
 import {ERC20Mock} from "@chainlink/contracts/src/v0.8/vendor/openzeppelin-solidity/v4.8.3/contracts/mocks/ERC20Mock.sol";
 import {AaveV3ArbitrumAssets} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
@@ -11,7 +10,7 @@ contract HelperConfig is Script {
     struct NetworkConfig {
         address wbtc;
         address usdc;
-        address wormholeCCTP;
+        address cctp;
         uint256 deployerKey;
         bytes32 solanaAccount;
     }
@@ -26,19 +25,25 @@ contract HelperConfig is Script {
     address public constant MAINNET_WBTC = AaveV3ArbitrumAssets.WBTC_UNDERLYING;
     address public constant MAINNET_USDC =
         AaveV3ArbitrumAssets.USDCn_UNDERLYING;
+    address public constant TESTNET_USDC =
+        0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d;
 
-    // Wormhole
-    address public constant WORMHOLE_CCTP =
-        0x2703483B1a5a7c577e8680de9Df8Be03c6f30e3c;
+    // CCTP
+    address public constant MAINNET_CCTP =
+        0x19330d10D9Cc8751218eaf51E8885D058642E08A;
+    address public constant TESTNET_CCTP =
+        0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5;
 
     NetworkConfig public activeNetworkConfig;
 
     constructor() {
-        // if (block.chainid == 42161) {
-        //     activeNetworkConfig = getArbitrumConfig();
-        // } else {
-        activeNetworkConfig = getLocalConfig();
-        // }
+        if (block.chainid == 42161) {
+            activeNetworkConfig = getArbitrumConfig();
+        } else if (block.chainid == 421614) {
+            activeNetworkConfig = getTestnetConfig();
+        } else {
+            activeNetworkConfig = getLocalConfig();
+        }
     }
 
     function getLocalConfig() public pure returns (NetworkConfig memory) {
@@ -46,7 +51,7 @@ contract HelperConfig is Script {
             NetworkConfig({
                 wbtc: MAINNET_WBTC,
                 usdc: MAINNET_USDC,
-                wormholeCCTP: WORMHOLE_CCTP,
+                cctp: MAINNET_CCTP,
                 deployerKey: DEFAULT_ANVIL_KEY,
                 solanaAccount: SOLANA_ACCOUNT_ADDRESS
             });
@@ -57,7 +62,18 @@ contract HelperConfig is Script {
             NetworkConfig({
                 wbtc: MAINNET_WBTC,
                 usdc: MAINNET_USDC,
-                wormholeCCTP: WORMHOLE_CCTP,
+                cctp: MAINNET_CCTP,
+                deployerKey: vm.envUint("PRIVATE_KEY"),
+                solanaAccount: SOLANA_ACCOUNT_ADDRESS
+            });
+    }
+
+    function getTestnetConfig() public view returns (NetworkConfig memory) {
+        return
+            NetworkConfig({
+                wbtc: MAINNET_WBTC,
+                usdc: TESTNET_USDC,
+                cctp: TESTNET_CCTP,
                 deployerKey: vm.envUint("PRIVATE_KEY"),
                 solanaAccount: SOLANA_ACCOUNT_ADDRESS
             });
