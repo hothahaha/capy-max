@@ -18,6 +18,7 @@ import {IAaveOracle} from "./aave/interface/IAaveOracle.sol";
 import {IVariableDebtToken} from "./aave/interface/IVariableDebtToken.sol";
 import {ITokenMessenger} from "./cctp/interface/ITokenMessenger.sol";
 import {CpToken} from "./tokens/CpToken.sol";
+import {Vault} from "./vault/Vault.sol";
 
 /// @title StrategyEngine
 /// @notice Manages yield generation through AAVE and HyperLiquid
@@ -33,6 +34,9 @@ contract StrategyEngine is
     uint256 private constant LTV_BELOW = 700;
     uint256 private constant MIN_STAKE_TIME = 5 days;
     uint8 private constant DESTINATION_DOMAIN = 5;
+    uint256 private constant PLATFORM_FEE_PERCENTAGE = 1000; // 10%
+    uint256 private constant BASIS_POINTS = 10000; // 100%
+    uint256 private constant HEALTH_FACTOR_THRESHOLD = 1e18; // 1.0
 
     // Token and protocol contracts
     IERC20 public wbtc;
@@ -73,6 +77,7 @@ contract StrategyEngine is
 
     // Errors
     error StrategyEngine__InvalidAmount();
+    error StrategyEngine__WithdrawAmountTooHigh();
     error StrategyEngine__NoDeposit();
     error StrategyEngine__StakeTimeNotMet();
     error StrategyEngine__TransferFailed();
@@ -87,6 +92,9 @@ contract StrategyEngine is
 
     // Add Solana account storage
     bytes32 public solanaAccount;
+
+    // 添加状态变量
+    Vault public vault;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -111,6 +119,9 @@ contract StrategyEngine is
         cpToken = CpToken(_cpToken);
         cctp = ITokenMessenger(_cctp);
         solanaAccount = _solanaAccount;
+
+        // 在 initialize 函数中添加
+        vault = new Vault(address(usdc));
     }
 
     /// @notice 实现 UUPS 升级功能
@@ -176,21 +187,9 @@ contract StrategyEngine is
         wbtc.approve(address(aavePool), amount);
         aavePool.supply(address(wbtc), amount, onBehalfOf, referralCode);
 
-        // 铸造 cpBTC
-        cpToken.mint(msg.sender, amount);
-
         // 计算并借出 USDC
         uint256 borrowAmount = _calculateBorrowAmount(onBehalfOf);
         aavePool.borrow(address(usdc), borrowAmount, 2, 0, onBehalfOf);
-
-        // CCTP 跨链传输
-        usdc.approve(address(cctp), borrowAmount);
-        cctp.depositForBurn(
-            borrowAmount,
-            DESTINATION_DOMAIN,
-            solanaAccount,
-            address(usdc)
-        );
 
         // 更新用户信息
         _updateUserInfo(msg.sender, TokenType.WBTC, amount, borrowAmount);
@@ -240,8 +239,87 @@ contract StrategyEngine is
         info.lastDepositTime = block.timestamp;
     }
 
-    function withdraw(uint256 amount) external nonReentrant {
-        // TODO
+    function withdraw(
+        TokenType tokenType,
+        address onBehalfOf,
+        uint256 amount
+    ) external nonReentrant {
+        if (amount == 0) revert StrategyEngine__InvalidAmount();
+
+        UserInfo storage info = userInfo[msg.sender];
+        uint256 profit;
+        uint256 withdrawUSDCAmount;
+
+        if (tokenType == TokenType.WBTC) {
+            // 偿还 Aave 借款
+            usdc.approve(address(aavePool), amount);
+
+            // Aave会计算用户应还的USDC数量，并从用户账户中扣除，并返回实际偿还的USDC数量
+            uint256 repayAmount = aavePool.repay(
+                address(usdc),
+                type(uint256).max - 1, // Aave不允许授权人偿还最大值
+                2, // Variable rate
+                onBehalfOf
+            );
+
+            // 检查健康因子
+            (, , , , , uint256 healthFactor) = _getUserAccountData(onBehalfOf);
+            if (healthFactor >= HEALTH_FACTOR_THRESHOLD) {
+                // 健康因子正常，可以取回抵押品
+                // uint256 wbtcAmount = info.totalWbtcAmount;
+
+                // 取回抵押品
+                // aavePool.withdraw(address(wbtc), wbtcAmount, address(this));
+
+                // 计算利润
+                profit = amount - repayAmount;
+
+                // 将本金转给用户
+                // wbtc.safeTransfer(msg.sender, wbtcAmount);
+
+                // 更新用户信息
+                info.totalWbtcAmount = 0;
+                info.totalBorrowAmount = 0;
+            } else {
+                // 健康因子不足，只更新借贷金额
+                info.totalBorrowAmount -= amount;
+                return;
+            }
+        } else {
+            // USDC 提款逻辑
+            if (info.totalUsdcAmount < amount)
+                revert StrategyEngine__WithdrawAmountTooHigh();
+
+            // 计算利润
+            profit = amount - info.totalUsdcAmount;
+
+            withdrawUSDCAmount = info.totalUsdcAmount;
+
+            // 更新用户信息
+            info.totalUsdcAmount = 0;
+        }
+
+        if (profit > 0) {
+            // 计算平台费用
+            uint256 platformFee = (profit * PLATFORM_FEE_PERCENTAGE) /
+                BASIS_POINTS;
+            uint256 userProfit = profit - platformFee;
+
+            // 将平台费用存入 vault
+            if (platformFee > 0) {
+                usdc.safeTransfer(address(vault), platformFee);
+            }
+
+            withdrawUSDCAmount += userProfit;
+
+            // 转出用户利润
+            usdc.safeTransfer(msg.sender, withdrawUSDCAmount);
+
+            // 铸造奖励代币
+            cpToken.mint(msg.sender, userProfit);
+        }
+
+        emit Withdrawn(msg.sender, amount, profit);
     }
 
     function _calculateBorrowAmount(
