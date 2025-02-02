@@ -96,8 +96,7 @@ contract StrategyEngineUpgradesTest is Test {
             address(0),
             address(0),
             address(0),
-            address(0),
-            bytes32(0)
+            address(0)
         );
     }
 

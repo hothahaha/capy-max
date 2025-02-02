@@ -15,10 +15,11 @@ import {AaveV3Arbitrum, AaveV3ArbitrumAssets} from "@bgd-labs/aave-address-book/
 
 import {IAavePool} from "./aave/interface/IAavePool.sol";
 import {IAaveOracle} from "./aave/interface/IAaveOracle.sol";
-import {IVariableDebtToken} from "./aave/interface/IVariableDebtToken.sol";
-import {ITokenMessenger} from "./cctp/interface/ITokenMessenger.sol";
+import {IPoolDataProvider} from "./aave/interface/IAaveProtocolDataProvider.sol";
 import {CpToken} from "./tokens/CpToken.sol";
 import {Vault} from "./vault/Vault.sol";
+import {UserPosition} from "./UserPosition.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 /// @title StrategyEngine
 /// @notice Manages yield generation through AAVE and HyperLiquid
@@ -32,17 +33,15 @@ contract StrategyEngine is
 
     // Constants
     uint256 private constant LTV_BELOW = 700;
-    uint256 private constant MIN_STAKE_TIME = 5 days;
-    uint8 private constant DESTINATION_DOMAIN = 5;
     uint256 private constant PLATFORM_FEE_PERCENTAGE = 1000; // 10%
     uint256 private constant BASIS_POINTS = 10000; // 100%
-    uint256 private constant HEALTH_FACTOR_THRESHOLD = 1e18; // 1.0
 
     // Token and protocol contracts
     IERC20 public wbtc;
     IERC20 public usdc;
     IAavePool public aavePool;
     IAaveOracle public aaveOracle;
+    IPoolDataProvider public aaveProtocolDataProvider;
     CpToken public cpToken;
 
     // 添加代币类型枚举
@@ -86,15 +85,15 @@ contract StrategyEngine is
     error StrategyEngine__HealthFactorTooLow();
     error StrategyEngine__NoAvailableBorrows();
     error StrategyEngine__InsufficientExecutionFee();
-
-    // Add CCTP contract
-    ITokenMessenger public cctp;
-
-    // Add Solana account storage
-    bytes32 public solanaAccount;
+    error StrategyEngine__PositionAlreadyExists();
+    error StrategyEngine__PositionNotFound();
 
     // 添加状态变量
     Vault public vault;
+
+    // 添加用户位置映射
+    mapping(address => address) public userToPosition;
+    mapping(address => address) public positionToUser;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -105,8 +104,7 @@ contract StrategyEngine is
         address _wbtc,
         address _usdc,
         address _cpToken,
-        address _cctp,
-        bytes32 _solanaAccount
+        address _vault
     ) public initializer {
         __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
@@ -116,12 +114,11 @@ contract StrategyEngine is
         usdc = IERC20(_usdc);
         aavePool = IAavePool(address(AaveV3Arbitrum.POOL));
         aaveOracle = IAaveOracle(address(AaveV3Arbitrum.ORACLE));
+        aaveProtocolDataProvider = IPoolDataProvider(
+            address(AaveV3Arbitrum.AAVE_PROTOCOL_DATA_PROVIDER)
+        );
         cpToken = CpToken(_cpToken);
-        cctp = ITokenMessenger(_cctp);
-        solanaAccount = _solanaAccount;
-
-        // 在 initialize 函数中添加
-        vault = new Vault(address(usdc));
+        vault = Vault(_vault);
     }
 
     /// @notice 实现 UUPS 升级功能
@@ -131,11 +128,12 @@ contract StrategyEngine is
         // 可以添加额外的升级条件
     }
 
-    /// @notice 修改后的存款函数
+    /// @notice 存款函数
+    /// @dev 根据存入的代币类型，如果是 WBTC，则需要授权，并存入 Aave
+    /// @dev 如果是 USDC，则直接存入 当前合约
     function deposit(
         TokenType tokenType,
         uint256 amount,
-        address onBehalfOf,
         uint16 referralCode,
         uint256 deadline,
         uint8 v,
@@ -145,15 +143,7 @@ contract StrategyEngine is
         if (amount == 0) revert StrategyEngine__InvalidAmount();
 
         if (tokenType == TokenType.WBTC) {
-            _handleWbtcDeposit(
-                amount,
-                onBehalfOf,
-                referralCode,
-                deadline,
-                v,
-                r,
-                s
-            );
+            _handleWbtcDeposit(amount, referralCode, deadline, v, r, s);
         } else {
             _handleUsdcDeposit(amount);
         }
@@ -162,13 +152,18 @@ contract StrategyEngine is
     /// @dev 处理 WBTC 存款
     function _handleWbtcDeposit(
         uint256 amount,
-        address onBehalfOf,
         uint16 referralCode,
         uint256 deadline,
         uint8 v,
         bytes32 r,
         bytes32 s
     ) internal {
+        // 获取或创建用户位置
+        address userPosition = userToPosition[msg.sender];
+        if (userPosition == address(0)) {
+            userPosition = _createUserPosition(msg.sender);
+        }
+
         // 使用 permit 授权
         IERC20Permit(address(wbtc)).permit(
             msg.sender,
@@ -180,16 +175,28 @@ contract StrategyEngine is
             s
         );
 
-        // 转移 WBTC
+        // 转移 WBTC 到合约
         wbtc.safeTransferFrom(msg.sender, address(this), amount);
 
-        // Aave 供应
-        wbtc.approve(address(aavePool), amount);
-        aavePool.supply(address(wbtc), amount, onBehalfOf, referralCode);
+        // 转移到用户位置并存入 Aave
+        wbtc.safeTransfer(userPosition, amount);
+        UserPosition(payable(userPosition)).executeAaveDeposit(
+            address(aavePool),
+            address(wbtc),
+            amount,
+            referralCode
+        );
 
         // 计算并借出 USDC
-        uint256 borrowAmount = _calculateBorrowAmount(onBehalfOf);
-        aavePool.borrow(address(usdc), borrowAmount, 2, 0, onBehalfOf);
+        uint256 borrowAmount = _calculateBorrowAmount(userPosition);
+        UserPosition(payable(userPosition)).executeBorrow(
+            address(aavePool),
+            address(usdc),
+            borrowAmount,
+            2, // Variable rate
+            0 // referralCode
+        );
+        usdc.safeTransferFrom(userPosition, address(this), borrowAmount);
 
         // 更新用户信息
         _updateUserInfo(msg.sender, TokenType.WBTC, amount, borrowAmount);
@@ -239,57 +246,74 @@ contract StrategyEngine is
         info.lastDepositTime = block.timestamp;
     }
 
+    /// @notice 提款函数
+    /// @dev 根据存入的代币类型，如果是 WBTC，则需要偿还 Aave 借款，检查健康度，并取回抵押品
+    /// @dev 如果是 USDC，则直接提款
+    /// @dev 计算利润，计算平台费用，将平台费用存入 vault，将用户利润转出
+    /// @dev 返回用户利润和实际偿还的 Aave 借款金额
     function withdraw(
         TokenType tokenType,
-        address onBehalfOf,
+        address user,
         uint256 amount
-    ) external nonReentrant {
+    )
+        external
+        nonReentrant
+        returns (uint256 userProfit, uint256 repayAaveAmount)
+    {
         if (amount == 0) revert StrategyEngine__InvalidAmount();
 
-        UserInfo storage info = userInfo[msg.sender];
+        uint256 engineBalance = usdc.balanceOf(address(this));
+        if (engineBalance < amount)
+            revert StrategyEngine__WithdrawAmountTooHigh();
+
+        UserInfo storage info = userInfo[user];
         uint256 profit;
         uint256 withdrawUSDCAmount;
 
         if (tokenType == TokenType.WBTC) {
-            // 偿还 Aave 借款
-            usdc.approve(address(aavePool), amount);
+            address userPosition = userToPosition[user];
+            if (userPosition == address(0))
+                revert StrategyEngine__PositionNotFound();
 
-            // Aave会计算用户应还的USDC数量，并从用户账户中扣除，并返回实际偿还的USDC数量
-            uint256 repayAmount = aavePool.repay(
+            usdc.safeTransfer(userPosition, amount);
+            // 偿还 Aave 借款
+            uint256 repayAmount = _calculateRepayAmount(
                 address(usdc),
-                type(uint256).max - 1, // Aave不允许授权人偿还最大值
-                2, // Variable rate
-                onBehalfOf
+                userPosition
             );
 
-            // 检查健康因子
-            (, , , , , uint256 healthFactor) = _getUserAccountData(onBehalfOf);
-            if (healthFactor >= HEALTH_FACTOR_THRESHOLD) {
-                // 健康因子正常，可以取回抵押品
-                // uint256 wbtcAmount = info.totalWbtcAmount;
+            repayAaveAmount = UserPosition(payable(userPosition)).executeRepay(
+                address(aavePool),
+                address(usdc),
+                amount,
+                2 // Variable rate
+            );
 
-                // 取回抵押品
-                // aavePool.withdraw(address(wbtc), wbtcAmount, address(this));
-
+            if (amount >= repayAmount) {
                 // 计算利润
                 profit = amount - repayAmount;
 
-                // 将本金转给用户
-                // wbtc.safeTransfer(msg.sender, wbtcAmount);
+                // 转移剩余 USDC 到 engine
+                usdc.safeTransferFrom(userPosition, address(this), profit);
+
+                uint256 wbtcAmount = info.totalWbtcAmount;
+
+                // 取回抵押品
+                UserPosition(payable(userPosition)).executeAaveWithdraw(
+                    address(aavePool),
+                    address(wbtc),
+                    wbtcAmount,
+                    user
+                );
 
                 // 更新用户信息
                 info.totalWbtcAmount = 0;
                 info.totalBorrowAmount = 0;
             } else {
-                // 健康因子不足，只更新借贷金额
                 info.totalBorrowAmount -= amount;
-                return;
+                return (0, repayAaveAmount);
             }
         } else {
-            // USDC 提款逻辑
-            if (info.totalUsdcAmount < amount)
-                revert StrategyEngine__WithdrawAmountTooHigh();
-
             // 计算利润
             profit = amount - info.totalUsdcAmount;
 
@@ -303,7 +327,7 @@ contract StrategyEngine is
             // 计算平台费用
             uint256 platformFee = (profit * PLATFORM_FEE_PERCENTAGE) /
                 BASIS_POINTS;
-            uint256 userProfit = profit - platformFee;
+            userProfit = profit - platformFee;
 
             // 将平台费用存入 vault
             if (platformFee > 0) {
@@ -317,9 +341,15 @@ contract StrategyEngine is
 
             // 铸造奖励代币
             cpToken.mint(msg.sender, userProfit);
+
+            return (userProfit, repayAaveAmount);
         }
 
         emit Withdrawn(msg.sender, amount, profit);
+    }
+
+    function createUserPosition() external {
+        _createUserPosition(msg.sender);
     }
 
     function _calculateBorrowAmount(
@@ -365,7 +395,8 @@ contract StrategyEngine is
             uint256 healthFactor
         )
     {
-        return _getUserAccountData(user);
+        address userPosition = userToPosition[user];
+        return _getUserAccountData(userPosition);
     }
 
     function _getUserAccountData(
@@ -383,6 +414,22 @@ contract StrategyEngine is
         )
     {
         return aavePool.getUserAccountData(user);
+    }
+
+    function calculateRepayAmount(
+        address asset,
+        address user
+    ) public view returns (uint256) {
+        return _calculateRepayAmount(asset, user);
+    }
+
+    function _calculateRepayAmount(
+        address asset,
+        address user
+    ) internal view returns (uint256) {
+        (, , uint256 currentVariableDebt, , , , , , ) = aaveProtocolDataProvider
+            .getUserReserveData(asset, user);
+        return currentVariableDebt;
     }
 
     // 添加获取用户存款记录的函数
@@ -412,5 +459,31 @@ contract StrategyEngine is
             info.totalBorrowAmount,
             info.lastDepositTime
         );
+    }
+
+    function _createUserPosition(address user) internal returns (address) {
+        if (userToPosition[user] != address(0))
+            revert StrategyEngine__PositionAlreadyExists();
+
+        bytes32 salt = keccak256(abi.encodePacked(user));
+
+        // 部署代理合约
+        bytes memory initData = abi.encodeWithSelector(
+            UserPosition.initialize.selector,
+            user
+        );
+
+        UserPosition userPosition = new UserPosition{salt: salt}();
+
+        ERC1967Proxy proxy = new ERC1967Proxy{salt: salt}(
+            address(userPosition),
+            initData
+        );
+
+        address positionAddress = address(proxy);
+        userToPosition[user] = positionAddress;
+        positionToUser[positionAddress] = user;
+
+        return positionAddress;
     }
 }

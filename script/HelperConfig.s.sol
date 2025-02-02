@@ -10,9 +10,7 @@ contract HelperConfig is Script {
     struct NetworkConfig {
         address wbtc;
         address usdc;
-        address cctp;
         uint256 deployerKey;
-        bytes32 solanaAccount;
     }
 
     // Accounts
@@ -51,9 +49,7 @@ contract HelperConfig is Script {
             NetworkConfig({
                 wbtc: MAINNET_WBTC,
                 usdc: MAINNET_USDC,
-                cctp: MAINNET_CCTP,
-                deployerKey: DEFAULT_ANVIL_KEY,
-                solanaAccount: SOLANA_ACCOUNT_ADDRESS
+                deployerKey: DEFAULT_ANVIL_KEY
             });
     }
 
@@ -62,9 +58,7 @@ contract HelperConfig is Script {
             NetworkConfig({
                 wbtc: MAINNET_WBTC,
                 usdc: MAINNET_USDC,
-                cctp: MAINNET_CCTP,
-                deployerKey: vm.envUint("PRIVATE_KEY"),
-                solanaAccount: SOLANA_ACCOUNT_ADDRESS
+                deployerKey: vm.envUint("PRIVATE_KEY")
             });
     }
 
@@ -73,9 +67,7 @@ contract HelperConfig is Script {
             NetworkConfig({
                 wbtc: MAINNET_WBTC,
                 usdc: TESTNET_USDC,
-                cctp: TESTNET_CCTP,
-                deployerKey: vm.envUint("PRIVATE_KEY"),
-                solanaAccount: SOLANA_ACCOUNT_ADDRESS
+                deployerKey: vm.envUint("PRIVATE_KEY")
             });
     }
 }

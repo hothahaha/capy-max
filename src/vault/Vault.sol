@@ -1,27 +1,40 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract Vault is Ownable {
+contract Vault is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     using SafeERC20 for IERC20;
 
     error Vault__InvalidAmount();
     error Vault__TransferFailed();
     error Vault__Unauthorized();
 
-    IERC20 public immutable token;
+    IERC20 public token;
     mapping(address => bool) public authorized;
 
     event ProfitDeposited(uint256 amount);
     event ProfitWithdrawn(address indexed to, uint256 amount);
     event AuthorizationUpdated(address indexed user, bool status);
 
-    constructor(address _token) Ownable(msg.sender) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address _token) public initializer {
+        __Ownable_init(msg.sender);
+        __UUPSUpgradeable_init();
         token = IERC20(_token);
     }
+
+    function _authorizeUpgrade(
+        address newImplementation
+    ) internal override onlyOwner {}
 
     modifier onlyAuthorized() {
         if (!authorized[msg.sender] && msg.sender != owner()) {

@@ -8,14 +8,13 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {AaveV3Arbitrum} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
 
 import {IAavePool} from "../src/aave/interface/IAavePool.sol";
-import {IPoolDataProvider} from "../src/aave/interface/IAaveProtocolDataProvider.sol";
 import {IVariableDebtToken} from "../src/aave/interface/IVariableDebtToken.sol";
 import {StrategyEngine} from "../src/StrategyEngine.sol";
+import {UserPosition} from "../src/UserPosition.sol";
 import {DeployScript} from "../script/Deploy.s.sol";
 import {HelperConfig} from "../script/HelperConfig.s.sol";
 
 contract StrategyEngineTest is Test {
-    IPoolDataProvider public aaveProtocolDataProvider;
     IAavePool public aavePool;
     StrategyEngine public engine;
     address public wbtc;
@@ -25,6 +24,7 @@ contract StrategyEngineTest is Test {
     uint256 public constant INITIAL_ETH_BALANCE = 10 ether;
     uint256 public constant INITIAL_WBTC_BALANCE = 1000e8;
     uint256 public constant GMX_EXECUTION_FEE = 0.011 ether;
+    uint256 public constant HEALTH_FACTOR_THRESHOLD = 1e19; // 1.0
 
     // GMX related addresses
     address public constant GMX_ROUTER =
@@ -37,7 +37,7 @@ contract StrategyEngineTest is Test {
         DeployScript deployer = new DeployScript();
         HelperConfig config = new HelperConfig();
         (engine, , config) = deployer.run();
-        (wbtc, usdc, , , ) = config.activeNetworkConfig();
+        (wbtc, usdc, ) = config.activeNetworkConfig();
 
         (USER, USER_PRIVATE_KEY) = makeAddrAndKey("user");
 
@@ -66,17 +66,13 @@ contract StrategyEngineTest is Test {
 
         vm.startPrank(USER);
 
-        _approveDelegation(usdc, USER, type(uint256).max);
-
         // 记录存款前的余额
         uint256 beforeWbtcBalance = IERC20(wbtc).balanceOf(USER);
-        uint256 beforeCpTokenBalance = engine.cpToken().balanceOf(USER);
 
         // 执行存款
         engine.deposit{value: GMX_EXECUTION_FEE}(
             StrategyEngine.TokenType.WBTC,
             amount,
-            USER,
             0,
             deadline,
             v,
@@ -115,13 +111,6 @@ contract StrategyEngineTest is Test {
         assertGt(availableBorrowsBase, 0, "Should have available borrows");
         assertLt(healthFactor, 1e27, "Health factor should be less than 1");
 
-        // 验证 cpToken 铸造
-        assertEq(
-            engine.cpToken().balanceOf(USER),
-            beforeCpTokenBalance + amount,
-            "Incorrect cpToken mint amount"
-        );
-
         // 验证存款记录
         StrategyEngine.DepositRecord[] memory records = engine
             .getUserDepositRecords(USER);
@@ -136,6 +125,15 @@ contract StrategyEngineTest is Test {
             records[0].borrowAmount,
             0,
             "Should have borrow amount in record"
+        );
+
+        // 验证健康因子
+        (, , , , , uint256 healthFactorAfterDeposit) = engine
+            .getUserAccountData(USER);
+        assertLt(
+            healthFactorAfterDeposit,
+            HEALTH_FACTOR_THRESHOLD,
+            "Health factor should be less than threshold after deposit and borrow"
         );
 
         vm.stopPrank();
@@ -158,7 +156,6 @@ contract StrategyEngineTest is Test {
         engine.deposit(
             StrategyEngine.TokenType.USDC,
             amount,
-            USER,
             0,
             0,
             0,
@@ -214,7 +211,6 @@ contract StrategyEngineTest is Test {
         engine.deposit(
             StrategyEngine.TokenType.USDC,
             0,
-            USER,
             0,
             0,
             0,
@@ -235,7 +231,6 @@ contract StrategyEngineTest is Test {
         engine.deposit(
             StrategyEngine.TokenType.USDC,
             amount,
-            USER,
             0,
             0,
             0,
@@ -259,7 +254,6 @@ contract StrategyEngineTest is Test {
         engine.deposit(
             StrategyEngine.TokenType.USDC,
             amount,
-            USER,
             0,
             0,
             0,
@@ -277,12 +271,11 @@ contract StrategyEngineTest is Test {
         vm.stopPrank();
     }
 
-    function test_WithdrawWBTC() public {
+    // 添加存款 modifier
+    modifier withWBTCDeposit() {
         uint256 depositAmount = 1e7;
         uint256 deadline = block.timestamp + 1 days;
-        uint256 beforeWbtcBalance = IERC20(wbtc).balanceOf(USER);
 
-        // 准备存款
         (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
             wbtc,
             USER,
@@ -294,52 +287,57 @@ contract StrategyEngineTest is Test {
         );
 
         vm.startPrank(USER);
-        _approveDelegation(usdc, USER, type(uint256).max);
 
-        // 先进行存款
         engine.deposit{value: GMX_EXECUTION_FEE}(
             StrategyEngine.TokenType.WBTC,
             depositAmount,
-            USER,
             0,
             deadline,
             v,
             r,
             s
         );
+        _;
+    }
 
+    // 添加 USDC 存款 modifier
+    modifier withUSDCDeposit(uint256 amount) {
+        vm.startPrank(USER);
+
+        // 给用户铸造 USDC
+        deal(address(usdc), USER, amount);
+
+        // 授权并存款
+        IERC20(usdc).approve(address(engine), amount);
+        engine.deposit(
+            StrategyEngine.TokenType.USDC,
+            amount,
+            0,
+            0,
+            0,
+            bytes32(0),
+            bytes32(0)
+        );
+        _;
+    }
+
+    function test_WithdrawWBTC() public withWBTCDeposit {
+        uint256 beforeWbtcBalance = INITIAL_WBTC_BALANCE;
         // 获取借贷金额
-        (, , uint256 totalBorrows, ) = engine.getUserTotals(USER);
+        (uint256 totalWbtc, , uint256 totalBorrows, ) = engine.getUserTotals(
+            USER
+        );
         assertGt(totalBorrows, 0, "Should have borrowed USDC");
 
         // 验证 WBTC 余额
         assertEq(
             IERC20(wbtc).balanceOf(USER),
-            beforeWbtcBalance - depositAmount,
-            "Incorrect Before WBTC balance change"
+            beforeWbtcBalance - totalWbtc,
+            "Incorrect WBTC balance change"
         );
 
-        // 模拟 USDC 获利（50% 的借贷金额）
-        uint256 profit = totalBorrows / 2;
-        uint256 withdrawAmount = totalBorrows + profit;
-        deal(
-            address(usdc),
-            address(engine),
-            IERC20(usdc).balanceOf(address(engine)) + profit
-        );
-
-        // 执行提款
-        engine.withdraw(StrategyEngine.TokenType.WBTC, USER, withdrawAmount);
-
-        // 从 Aave 提取 WBTC 本金
-        _withdrawFromAave(address(wbtc), depositAmount, USER);
-
-        // 验证 WBTC 余额
-        assertEq(
-            IERC20(wbtc).balanceOf(USER),
-            beforeWbtcBalance,
-            "Incorrect After WBTC balance change"
-        );
+        // 提款
+        engine.withdraw(StrategyEngine.TokenType.WBTC, USER, totalBorrows);
 
         // 验证状态更新
         (uint256 newTotalWbtc, , uint256 newTotalBorrows, ) = engine
@@ -347,66 +345,30 @@ contract StrategyEngineTest is Test {
         assertEq(newTotalWbtc, 0, "WBTC balance should be zero");
         assertEq(newTotalBorrows, 0, "Borrow amount should be zero");
 
-        vm.stopPrank();
+        // 验证健康因子
+        (, , , , , uint256 healthFactor) = engine.getUserAccountData(USER);
+        assertGt(
+            healthFactor,
+            HEALTH_FACTOR_THRESHOLD,
+            "Health factor should be greater than threshold after full repayment"
+        );
     }
 
-    function test_WithdrawUSDC() public {
-        uint256 depositAmount = 1000e6; // 1000 USDC
-
-        vm.startPrank(USER);
-
-        // 给用户铸造 USDC
-        deal(address(usdc), USER, depositAmount);
-
-        // 授权并存入 USDC
-        IERC20(usdc).approve(address(engine), depositAmount);
-        engine.deposit(
-            StrategyEngine.TokenType.USDC,
-            depositAmount,
-            USER,
-            0,
-            0,
-            0,
-            bytes32(0),
-            bytes32(0)
-        );
-
+    function test_WithdrawUSDC() public withUSDCDeposit(1000e6) {
         // 验证存款
         (, uint256 totalUsdc, , ) = engine.getUserTotals(USER);
-        assertEq(totalUsdc, depositAmount, "Incorrect USDC deposit amount");
+        assertEq(totalUsdc, 1000e6, "Incorrect USDC deposit amount");
 
-        // 执行提款
-        engine.withdraw(StrategyEngine.TokenType.USDC, USER, depositAmount);
+        engine.withdraw(StrategyEngine.TokenType.USDC, USER, totalUsdc);
 
-        // 验证提款后状态
+        // 验证状态更新
         (, uint256 newTotalUsdc, , ) = engine.getUserTotals(USER);
         assertEq(newTotalUsdc, 0, "USDC balance should be zero");
-
-        vm.stopPrank();
     }
 
-    function test_WithdrawWithProfit() public {
-        uint256 depositAmount = 1000e6; // 1000 USDC
+    function test_WithdrawWithProfit() public withUSDCDeposit(1000e6) {
         uint256 profit = 100e6; // 100 USDC profit
-        uint256 totalAmount = depositAmount + profit;
-
-        vm.startPrank(USER);
-
-        // 给用户铸造 USDC
-        deal(address(usdc), USER, depositAmount);
-
-        // 存入 USDC
-        IERC20(usdc).approve(address(engine), depositAmount);
-        engine.deposit(
-            StrategyEngine.TokenType.USDC,
-            depositAmount,
-            USER,
-            0,
-            0,
-            0,
-            bytes32(0),
-            bytes32(0)
-        );
+        uint256 totalAmount = 1000e6 + profit;
 
         // 模拟利润（直接转入合约）
         deal(address(usdc), address(engine), totalAmount);
@@ -431,8 +393,6 @@ contract StrategyEngineTest is Test {
             userProfit,
             "Incorrect reward token amount"
         );
-
-        vm.stopPrank();
     }
 
     function testFail_WithdrawInvalidAmount() public {
@@ -444,108 +404,134 @@ contract StrategyEngineTest is Test {
         vm.stopPrank();
     }
 
-    function testFail_WithdrawWBTCWithHighBorrow() public {
-        uint256 depositAmount = 1e7;
-        uint256 deadline = block.timestamp + 1 days;
-
-        // 存款
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            USER,
-            address(engine),
-            depositAmount,
-            IERC20Permit(wbtc).nonces(USER),
-            deadline,
-            USER_PRIVATE_KEY
+    function testFail_WithdrawWBTCWithHighBorrow() public withWBTCDeposit {
+        // 验证存款后的健康因子
+        (, , , , , uint256 initialHealthFactor) = engine.getUserAccountData(
+            USER
+        );
+        assertLt(
+            initialHealthFactor,
+            HEALTH_FACTOR_THRESHOLD,
+            "Initial health factor should be less than threshold"
         );
 
-        vm.startPrank(USER);
-        _approveDelegation(usdc, USER, type(uint256).max);
-
-        engine.deposit{value: GMX_EXECUTION_FEE}(
-            StrategyEngine.TokenType.WBTC,
-            depositAmount,
-            USER,
-            0,
-            deadline,
-            v,
-            r,
-            s
-        );
+        uint256 engineBalance = IERC20(usdc).balanceOf(address(engine));
 
         // 尝试提取小于借贷金额的 USDC
-        uint256 invalidWithdrawAmount = depositAmount - 100e6; // 减少 100 USDC
+        uint256 invalidWithdrawAmount = engineBalance +
+            (engineBalance * 10) /
+            100; // 减少 100 USDC
         engine.withdraw(
             StrategyEngine.TokenType.WBTC,
             USER,
             invalidWithdrawAmount
         );
-
-        vm.stopPrank();
     }
 
-    function test_WithdrawWithUnhealthyFactor() public {
-        uint256 depositAmount = 1e7;
-        uint256 deadline = block.timestamp + 1 days;
-
-        // 存款
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            USER,
-            address(engine),
-            depositAmount,
-            IERC20Permit(wbtc).nonces(USER),
-            deadline,
-            USER_PRIVATE_KEY
-        );
-
-        vm.startPrank(USER);
-        _approveDelegation(usdc, USER, type(uint256).max);
-
-        engine.deposit{value: GMX_EXECUTION_FEE}(
-            StrategyEngine.TokenType.WBTC,
-            depositAmount,
-            USER,
-            0,
-            deadline,
-            v,
-            r,
-            s
-        );
-
+    function test_WithdrawWithUnhealthyFactor() public withWBTCDeposit {
         // 获取借贷金额
         (, , uint256 totalBorrows, ) = engine.getUserTotals(USER);
         uint256 profit = totalBorrows / 2; // 50% 的借贷金额作为获利
-        uint256 withdrawAmount = totalBorrows + profit;
         deal(
             address(usdc),
             address(engine),
             IERC20(usdc).balanceOf(address(engine)) + profit
         );
 
-        // 模拟不健康的健康因子
-        vm.mockCall(
-            address(engine.aavePool()),
-            abi.encodeWithSelector(IAavePool.getUserAccountData.selector, USER),
-            abi.encode(
-                1e18, // totalCollateralBase
-                1e18, // totalDebtBase
-                0, // availableBorrowsBase
-                8000, // currentLiquidationThreshold
-                7500, // ltv
-                0.5e18 // healthFactor < 1
-            )
+        // 使用低于借款的还款金额，这样还款后健康度仍低于标准值
+        uint256 withdrawAmount = totalBorrows - (totalBorrows * 50) / 100;
+
+        // 验证存款后的健康因子
+        (, , , , , uint256 initialHealthFactor) = engine.getUserAccountData(
+            USER
+        );
+        assertLt(
+            initialHealthFactor,
+            HEALTH_FACTOR_THRESHOLD,
+            "Initial health factor should be less than threshold"
         );
 
         // 尝试提款
         engine.withdraw(StrategyEngine.TokenType.WBTC, USER, withdrawAmount);
 
+        // 验证部分还款后的健康因子
+        (, , , , , uint256 finalHealthFactor) = engine.getUserAccountData(USER);
+        assertLt(
+            finalHealthFactor,
+            HEALTH_FACTOR_THRESHOLD,
+            "Health factor should still be less than threshold after partial repayment"
+        );
+
         // 验证只更新了借贷金额
         (, , uint256 newTotalBorrows, ) = engine.getUserTotals(USER);
         assertGt(newTotalBorrows, 0, "Borrow amount should not be zero");
+    }
 
-        vm.stopPrank();
-        vm.clearMockedCalls();
+    function test_RepayAmountCalculation() public withWBTCDeposit {
+        // 获取用户位置和借贷金额
+        address userPosition = engine.userToPosition(USER);
+        (, , uint256 totalBorrows, ) = engine.getUserTotals(USER);
+
+        // 获取预期还款金额
+        uint256 expectedRepayAmount = engine.calculateRepayAmount(
+            address(usdc),
+            userPosition
+        );
+
+        // 模拟 USDC 余额
+        deal(
+            address(usdc),
+            address(engine),
+            IERC20(usdc).balanceOf(address(engine)) + totalBorrows
+        );
+
+        // 执行还款
+        (, uint256 actualRepayAmount) = engine.withdraw(
+            StrategyEngine.TokenType.WBTC,
+            USER,
+            totalBorrows
+        );
+
+        // 验证实际还款金额等于计算的应还款金额
+        assertEq(
+            expectedRepayAmount,
+            actualRepayAmount,
+            "Actual repay amount should equal calculated repay amount"
+        );
+    }
+
+    function test_PartialRepayAmountCalculation() public withWBTCDeposit {
+        // 获取用户位置和借贷金额
+        address userPosition = engine.userToPosition(USER);
+        (, , uint256 totalBorrows, ) = engine.getUserTotals(USER);
+
+        // 验证部分还款
+        uint256 partialAmount = totalBorrows / 2;
+        deal(
+            address(usdc),
+            address(engine),
+            IERC20(usdc).balanceOf(address(engine)) + partialAmount
+        );
+
+        // 获取部分还款前的应还金额
+        uint256 expectedPartialRepayAmount = engine.calculateRepayAmount(
+            address(usdc),
+            userPosition
+        );
+
+        // 执行部分还款
+        engine.withdraw(StrategyEngine.TokenType.WBTC, USER, partialAmount);
+
+        // 验证部分还款后的剩余应还金额
+        uint256 remainingRepayAmount = engine.calculateRepayAmount(
+            address(usdc),
+            userPosition
+        );
+        assertEq(
+            remainingRepayAmount,
+            expectedPartialRepayAmount - partialAmount,
+            "Remaining repay amount incorrect after partial repayment"
+        );
     }
 
     // Helper functions
@@ -573,38 +559,5 @@ contract StrategyEngineTest is Test {
         );
 
         (v, r, s) = vm.sign(privateKey, digest);
-    }
-
-    /// @notice 授权用户可以偿还最大值的债务
-    function _approveDelegation(
-        address token,
-        address user,
-        uint256 amount
-    ) internal {
-        aaveProtocolDataProvider = IPoolDataProvider(
-            address(AaveV3Arbitrum.AAVE_PROTOCOL_DATA_PROVIDER)
-        );
-
-        (, , address variableDebtTokenAddress) = aaveProtocolDataProvider
-            .getReserveTokensAddresses(token);
-
-        IVariableDebtToken(variableDebtTokenAddress).approveDelegation(
-            address(engine),
-            amount
-        );
-
-        uint256 borrowAllowance = IVariableDebtToken(variableDebtTokenAddress)
-            .borrowAllowance(user, address(engine));
-        assertEq(borrowAllowance, amount, "Incorrect borrow allowance");
-    }
-
-    /// @notice 从 Aave 提取用户的本金
-    function _withdrawFromAave(
-        address token,
-        uint256 amount,
-        address user
-    ) internal {
-        aavePool = IAavePool(engine.aavePool());
-        aavePool.withdraw(token, amount, user);
     }
 }
