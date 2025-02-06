@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.20;
 
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @title CpToken
@@ -15,8 +15,10 @@ contract CpToken is
     UUPSUpgradeable
 {
     // Errors
+    error CpToken__Unauthorized();
+    error CpToken__InvalidAmount();
     error CpToken__TransferNotAllowed();
-    error CpToken__NotAuthorized();
+    error CpToken__InvalidUpgrade();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -36,6 +38,7 @@ contract CpToken is
     /// @param to The address to mint tokens to
     /// @param amount The amount of tokens to mint
     function mint(address to, uint256 amount) external onlyOwner {
+        if (amount == 0) revert CpToken__InvalidAmount();
         _mint(to, amount);
     }
 
@@ -43,6 +46,7 @@ contract CpToken is
     /// @param from The address to burn tokens from
     /// @param amount The amount of tokens to burn
     function burn(address from, uint256 amount) external onlyOwner {
+        if (amount == 0) revert CpToken__InvalidAmount();
         _burn(from, amount);
     }
 
@@ -67,5 +71,7 @@ contract CpToken is
 
     function _authorizeUpgrade(
         address newImplementation
-    ) internal override onlyOwner {}
+    ) internal view override onlyOwner {
+        if (newImplementation == address(0)) revert CpToken__InvalidUpgrade();
+    }
 }

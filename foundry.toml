@@ -8,7 +8,6 @@ remappings = [
     "@chainlink/=lib/chainlink-brownie-contracts/",
     "@arbitrum/nitro-contracts/=lib/nitro-contracts/",
     "@bgd-labs/aave-address-book/=lib/aave-address-book/src/",
-    "@wormhole-solidity-sdk/=lib/wormhole-solidity-sdk/src/",
 ]
 ffi = true
 

@@ -20,6 +20,8 @@ import {CpToken} from "./tokens/CpToken.sol";
 import {Vault} from "./vault/Vault.sol";
 import {UserPosition} from "./UserPosition.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {SignerManager} from "./access/SignerManager.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 /// @title StrategyEngine
 /// @notice Manages yield generation through AAVE and HyperLiquid
@@ -33,8 +35,10 @@ contract StrategyEngine is
 
     // Constants
     uint256 private constant LTV_BELOW = 700;
-    uint256 private constant PLATFORM_FEE_PERCENTAGE = 1000; // 10%
     uint256 private constant BASIS_POINTS = 10000; // 100%
+
+    // 不能使用 immutable，因为需要在升级时保持状态
+    uint256 private platformFeePercentage;
 
     // Token and protocol contracts
     IERC20 public wbtc;
@@ -43,6 +47,7 @@ contract StrategyEngine is
     IAaveOracle public aaveOracle;
     IPoolDataProvider public aaveProtocolDataProvider;
     CpToken public cpToken;
+    SignerManager public signerManager;
 
     // 添加代币类型枚举
     enum TokenType {
@@ -73,6 +78,7 @@ contract StrategyEngine is
     event Deposited(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount, uint256 rewards);
     event EmergencyAction(address indexed user, string action);
+    event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
 
     // Errors
     error StrategyEngine__InvalidAmount();
@@ -87,13 +93,22 @@ contract StrategyEngine is
     error StrategyEngine__InsufficientExecutionFee();
     error StrategyEngine__PositionAlreadyExists();
     error StrategyEngine__PositionNotFound();
-
+    error StrategyEngine__InvalidFeePercentage();
+    error StrategyEngine__Unauthorized();
+    error StrategyEngine__InvalidImplementation();
     // 添加状态变量
     Vault public vault;
 
     // 添加用户位置映射
     mapping(address => address) public userToPosition;
     mapping(address => address) public positionToUser;
+
+    modifier onlySigner() {
+        if (!signerManager.isSigner(msg.sender)) {
+            revert StrategyEngine__Unauthorized();
+        }
+        _;
+    }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -104,11 +119,15 @@ contract StrategyEngine is
         address _wbtc,
         address _usdc,
         address _cpToken,
-        address _vault
+        address _vault,
+        address _signerManager
     ) public initializer {
         __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
+
+        // 设置初始平台费用
+        platformFeePercentage = 1000;
 
         wbtc = IERC20(_wbtc);
         usdc = IERC20(_usdc);
@@ -119,13 +138,25 @@ contract StrategyEngine is
         );
         cpToken = CpToken(_cpToken);
         vault = Vault(_vault);
+        signerManager = SignerManager(_signerManager);
     }
 
     /// @notice 实现 UUPS 升级功能
     function _authorizeUpgrade(
         address newImplementation
-    ) internal override onlyOwner {
-        // 可以添加额外的升级条件
+    ) internal view override onlyOwner {
+        // 获取当前实现合约地址
+        address currentImpl = ERC1967Utils.getImplementation();
+
+        // 检查新实现地址是否与当前实现相同
+        if (newImplementation == currentImpl) {
+            revert StrategyEngine__InvalidImplementation();
+        }
+
+        // 检查新实现合约地址是否为零地址
+        if (newImplementation == address(0)) {
+            revert StrategyEngine__InvalidImplementation();
+        }
     }
 
     /// @notice 存款函数
@@ -325,7 +356,7 @@ contract StrategyEngine is
 
         if (profit > 0) {
             // 计算平台费用
-            uint256 platformFee = (profit * PLATFORM_FEE_PERCENTAGE) /
+            uint256 platformFee = (profit * platformFeePercentage) /
                 BASIS_POINTS;
             userProfit = profit - platformFee;
 
@@ -485,5 +516,24 @@ contract StrategyEngine is
         positionToUser[positionAddress] = user;
 
         return positionAddress;
+    }
+
+    /// @notice 更新平台费用比例
+    /// @dev 只有合约所有者可以调用
+    /// @param newFeePercentage 新的费用比例，基点制(10000 = 100%)
+    function updatePlatformFee(uint256 newFeePercentage) external onlySigner {
+        if (newFeePercentage > BASIS_POINTS)
+            revert StrategyEngine__InvalidFeePercentage();
+
+        uint256 oldFee = platformFeePercentage;
+        platformFeePercentage = newFeePercentage;
+
+        emit PlatformFeeUpdated(oldFee, newFeePercentage);
+    }
+
+    /// @notice 获取当前平台费用比例
+    /// @return 当前费用比例，基点制(10000 = 100%)
+    function getPlatformFee() external view returns (uint256) {
+        return platformFeePercentage;
     }
 }
