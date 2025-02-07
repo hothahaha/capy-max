@@ -6,7 +6,6 @@ import {MultiSig} from "../../src/access/MultiSig.sol";
 import {SignerManager} from "../../src/access/SignerManager.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract MockTarget {
     uint256 public value;
@@ -19,7 +18,6 @@ contract MockTarget {
 }
 
 contract MultiSigTest is Test {
-    using MessageHashUtils for bytes32;
     MultiSig public multiSig;
     SignerManager public signerManager;
     HelperConfig public helperConfig;
@@ -129,8 +127,7 @@ contract MultiSigTest is Test {
         );
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = _hashTransaction(
-            address(multiSig),
+        bytes32 txHash = multiSig.hashTransaction(
             address(target),
             data,
             0,
@@ -163,8 +160,7 @@ contract MultiSigTest is Test {
         );
         uint256 deadline = block.timestamp - 1;
 
-        bytes32 txHash = _hashTransaction(
-            address(multiSig),
+        bytes32 txHash = multiSig.hashTransaction(
             address(target),
             data,
             0,
@@ -191,8 +187,7 @@ contract MultiSigTest is Test {
         );
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = _hashTransaction(
-            address(multiSig),
+        bytes32 txHash = multiSig.hashTransaction(
             address(target),
             data,
             0,
@@ -221,8 +216,7 @@ contract MultiSigTest is Test {
         uint256 deadline = block.timestamp + 1 days;
 
         // Add signer2
-        bytes32 addSignerTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 addSignerTxHash = multiSig.hashTransaction(
             address(signerManager),
             addSignerData,
             multiSig.nonce(),
@@ -246,8 +240,7 @@ contract MultiSigTest is Test {
             2
         );
 
-        bytes32 updateThresholdTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 updateThresholdTxHash = multiSig.hashTransaction(
             address(signerManager),
             updateThresholdData,
             multiSig.nonce(),
@@ -272,8 +265,7 @@ contract MultiSigTest is Test {
             42
         );
 
-        bytes32 targetTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 targetTxHash = multiSig.hashTransaction(
             address(target),
             targetData,
             multiSig.nonce(),
@@ -323,8 +315,7 @@ contract MultiSigTest is Test {
         uint256 deadline = block.timestamp + 1 days;
 
         // Add signer2
-        bytes32 addSignerTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 addSignerTxHash = multiSig.hashTransaction(
             address(signerManager),
             addSignerData,
             multiSig.nonce(),
@@ -348,8 +339,7 @@ contract MultiSigTest is Test {
             2
         );
 
-        bytes32 updateThresholdTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 updateThresholdTxHash = multiSig.hashTransaction(
             address(signerManager),
             updateThresholdData,
             multiSig.nonce(),
@@ -374,8 +364,7 @@ contract MultiSigTest is Test {
             42
         );
 
-        bytes32 targetTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 targetTxHash = multiSig.hashTransaction(
             address(target),
             targetData,
             multiSig.nonce(),
@@ -421,8 +410,7 @@ contract MultiSigTest is Test {
         );
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = _hashTransaction(
-            address(multiSig),
+        bytes32 txHash = multiSig.hashTransaction(
             address(0),
             data,
             0,
@@ -446,8 +434,7 @@ contract MultiSigTest is Test {
         uint256 deadline = block.timestamp + 1 days;
         uint256 currentNonce = multiSig.nonce();
 
-        bytes32 addSignerTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 addSignerTxHash = multiSig.hashTransaction(
             address(signerManager),
             addSignerData,
             currentNonce,
@@ -471,8 +458,7 @@ contract MultiSigTest is Test {
         );
 
         currentNonce = multiSig.nonce();
-        bytes32 updateThresholdTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 updateThresholdTxHash = multiSig.hashTransaction(
             address(signerManager),
             updateThresholdData,
             currentNonce,
@@ -498,8 +484,7 @@ contract MultiSigTest is Test {
         );
 
         currentNonce = multiSig.nonce();
-        bytes32 targetTxHash = _hashTransaction(
-            address(multiSig),
+        bytes32 targetTxHash = multiSig.hashTransaction(
             address(target),
             targetData,
             currentNonce,
@@ -521,23 +506,6 @@ contract MultiSigTest is Test {
         assertTrue(target.called());
         assertEq(target.value(), 42);
         assertTrue(signerManager.isSigner(signer2));
-    }
-
-    // Helper functions
-    function _hashTransaction(
-        address verifyingContract,
-        address to,
-        bytes memory data,
-        uint256 nonce,
-        uint256 deadline
-    ) internal view returns (bytes32) {
-        bytes32 txHash = MultiSig(verifyingContract).hashTransaction(
-            to,
-            data,
-            nonce,
-            deadline
-        );
-        return txHash.toEthSignedMessageHash();
     }
 
     function _signTransaction(

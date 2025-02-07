@@ -5,7 +5,6 @@ import {Test, console2} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {AaveV3Arbitrum} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
 
 import {IAavePool} from "../src/aave/interface/IAavePool.sol";
@@ -812,7 +811,7 @@ contract StrategyEngineTest is Test {
             nonce,
             deadline
         );
-        return MessageHashUtils.toEthSignedMessageHash(txHash);
+        return txHash;
     }
 
     function _signTransaction(

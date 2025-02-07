@@ -10,7 +10,6 @@ import {MultiSig} from "../../src/access/MultiSig.sol";
 import {SignerManager} from "../../src/access/SignerManager.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract VaultV2 is Vault {
     uint256 public newVariable;
@@ -212,7 +211,7 @@ contract VaultTest is Test {
             nonce,
             deadline
         );
-        return MessageHashUtils.toEthSignedMessageHash(txHash);
+        return txHash;
     }
 
     function _signTransaction(

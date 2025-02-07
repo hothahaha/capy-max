@@ -11,7 +11,6 @@ import {SignerManager} from "../src/access/SignerManager.sol";
 import {MultiSig} from "../src/access/MultiSig.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract StrategyEngineV2 is StrategyEngine {
     // 添加新功能用于测试升级
@@ -309,7 +308,7 @@ contract StrategyEngineUpgradesTest is Test {
             nonce,
             deadline
         );
-        return MessageHashUtils.toEthSignedMessageHash(txHash);
+        return txHash;
     }
 
     function _signTransaction(

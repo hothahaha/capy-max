@@ -68,24 +68,29 @@ contract MultiSig is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         bytes calldata data,
         uint256 deadline,
         bytes[] calldata signatures
-    ) external {
+    ) external returns (bytes memory) {
         // 验证目标地址
         if (to == address(0)) revert MultiSig__InvalidTarget();
 
         // 验证deadline
         if (block.timestamp > deadline) revert MultiSig__InvalidDeadline();
 
-        // 验证签名数量
+        // 获取当前所需的签名阈值
         uint256 threshold = signerManager.getThreshold();
-        if (signatures.length < threshold)
+
+        // 验证提供的签名数量是否达到阈值
+        if (signatures.length < threshold) {
             revert MultiSig__InsufficientSignatures();
+        }
 
         // 计算交易哈希
-        bytes32 txHash = _hashTransaction(to, data, _nonce, deadline);
-        bytes32 ethSignedHash = txHash.toEthSignedMessageHash();
+        bytes32 ethSignedHash = _hashTransaction(to, data, _nonce, deadline);
 
-        // 验证签名
+        // 用于记录有效签名者数量
+        uint256 validSignersCount = 0;
         address[] memory recoveredSigners = new address[](signatures.length);
+
+        // 验证所有签名
         for (uint256 i = 0; i < signatures.length; i++) {
             // 验证签名长度
             if (signatures[i].length != 65)
@@ -95,25 +100,37 @@ contract MultiSig is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             address signer = _recoverSigner(ethSignedHash, signatures[i]);
 
             // 验证签名者权限
-            if (!signerManager.isSigner(signer))
+            if (!signerManager.isSigner(signer)) {
                 revert MultiSig__InvalidSignature();
+            }
 
             // 检查重复签名
             for (uint256 j = 0; j < i; j++) {
-                if (signer == recoveredSigners[j])
+                if (signer == recoveredSigners[j]) {
                     revert MultiSig__DuplicateSignature();
+                }
             }
+
             recoveredSigners[i] = signer;
+            validSignersCount++;
+        }
+
+        // 再次验证有效签名数量是否达到阈值
+        if (validSignersCount < threshold) {
+            revert MultiSig__InsufficientSignatures();
         }
 
         // 增加nonce
         _nonce++;
 
         // 执行交易
-        (bool success, ) = to.call(data);
-        if (!success) revert MultiSig__ExecutionFailed();
+        (bool success, bytes memory result) = to.call(data);
+        if (!success) {
+            revert MultiSig__ExecutionFailed();
+        }
 
         emit TransactionExecuted(to, data, _nonce - 1, deadline);
+        return result;
     }
 
     function hashTransaction(
@@ -151,10 +168,13 @@ contract MultiSig is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             )
         );
 
-        return
-            keccak256(
-                abi.encodePacked("\x19\x01", domainSeparator, structHash)
-            );
+        bytes32 txHash = keccak256(
+            abi.encodePacked("\x19\x01", domainSeparator, structHash)
+        );
+
+        bytes32 ethSignedHash = txHash.toEthSignedMessageHash();
+
+        return ethSignedHash;
     }
 
     function _recoverSigner(

@@ -7,8 +7,6 @@ import {MultiSig} from "../../src/access/MultiSig.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-
 contract SignerManagerTest is Test {
     HelperConfig public helperConfig;
     SignerManager public signerManager;
@@ -338,7 +336,7 @@ contract SignerManagerTest is Test {
             nonce,
             deadline
         );
-        return MessageHashUtils.toEthSignedMessageHash(txHash);
+        return txHash;
     }
 
     function _signTransaction(
