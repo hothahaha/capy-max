@@ -57,6 +57,7 @@ contract StrategyEngine is
 
     // 修改存款记录结构体，添加代币类型
     struct DepositRecord {
+        bytes32 depositId;
         TokenType tokenType;
         uint256 amount;
         uint256 timestamp;
@@ -65,17 +66,23 @@ contract StrategyEngine is
 
     // 修改 UserInfo 结构体
     struct UserInfo {
-        uint256 totalWbtcAmount; // WBTC 总存款量
-        uint256 totalUsdcAmount; // USDC 总存款量
-        uint256 totalBorrowAmount; // 总借款量
+        uint256 totalWbtcDeposited;
+        uint256 totalUsdcDeposited;
+        uint256 totalBorrowAmount;
         uint256 lastDepositTime;
-        DepositRecord[] deposits; // 存款记录数组
+        DepositRecord[] deposits;
     }
 
     mapping(address => UserInfo) public userInfo;
 
     // Events
-    event Deposited(address indexed user, uint256 amount);
+    event Deposited(
+        bytes32 indexed depositId,
+        address indexed user,
+        TokenType tokenType,
+        uint256 amount,
+        uint256 borrowAmount
+    );
     event Withdrawn(address indexed user, uint256 amount, uint256 rewards);
     event EmergencyAction(address indexed user, string action);
     event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
@@ -159,6 +166,25 @@ contract StrategyEngine is
         }
     }
 
+    function generateDepositId(
+        address user,
+        TokenType tokenType,
+        uint256 amount,
+        uint256 timestamp
+    ) external pure returns (bytes32) {
+        return _generateDepositId(user, tokenType, amount, timestamp);
+    }
+
+    /// @dev 生成唯一的 depositId
+    function _generateDepositId(
+        address user,
+        TokenType tokenType,
+        uint256 amount,
+        uint256 timestamp
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(user, tokenType, amount, timestamp));
+    }
+
     /// @notice 存款函数
     /// @dev 根据存入的代币类型，如果是 WBTC，则需要授权，并存入 Aave
     /// @dev 如果是 USDC，则直接存入 当前合约
@@ -232,7 +258,20 @@ contract StrategyEngine is
         // 更新用户信息
         _updateUserInfo(msg.sender, TokenType.WBTC, amount, borrowAmount);
 
-        emit Deposited(msg.sender, amount);
+        bytes32 depositId = _generateDepositId(
+            msg.sender,
+            TokenType.WBTC,
+            amount,
+            block.timestamp
+        );
+
+        emit Deposited(
+            depositId,
+            msg.sender,
+            TokenType.WBTC,
+            amount,
+            borrowAmount
+        );
     }
 
     /// @dev 处理 USDC 存款
@@ -243,7 +282,14 @@ contract StrategyEngine is
         // 更新用户信息
         _updateUserInfo(msg.sender, TokenType.USDC, amount, 0);
 
-        emit Deposited(msg.sender, amount);
+        bytes32 depositId = _generateDepositId(
+            msg.sender,
+            TokenType.USDC,
+            amount,
+            block.timestamp
+        );
+
+        emit Deposited(depositId, msg.sender, TokenType.USDC, amount, 0);
     }
 
     /// @dev 更新用户信息
@@ -257,6 +303,12 @@ contract StrategyEngine is
 
         // 创建新的存款记录
         DepositRecord memory newDeposit = DepositRecord({
+            depositId: _generateDepositId(
+                user,
+                tokenType,
+                depositAmount,
+                block.timestamp
+            ),
             tokenType: tokenType,
             amount: depositAmount,
             timestamp: block.timestamp,
@@ -268,9 +320,9 @@ contract StrategyEngine is
 
         // 根据代币类型更新总额
         if (tokenType == TokenType.WBTC) {
-            info.totalWbtcAmount += depositAmount;
+            info.totalWbtcDeposited += depositAmount;
         } else {
-            info.totalUsdcAmount += depositAmount;
+            info.totalUsdcDeposited += depositAmount;
         }
 
         info.totalBorrowAmount += borrowAmount;
@@ -327,7 +379,7 @@ contract StrategyEngine is
                 // 转移剩余 USDC 到 engine
                 usdc.safeTransferFrom(userPosition, address(this), profit);
 
-                uint256 wbtcAmount = info.totalWbtcAmount;
+                uint256 wbtcAmount = info.totalWbtcDeposited;
 
                 // 取回抵押品
                 UserPosition(payable(userPosition)).executeAaveWithdraw(
@@ -338,7 +390,7 @@ contract StrategyEngine is
                 );
 
                 // 更新用户信息
-                info.totalWbtcAmount = 0;
+                info.totalWbtcDeposited = 0;
                 info.totalBorrowAmount = 0;
             } else {
                 info.totalBorrowAmount -= amount;
@@ -346,12 +398,12 @@ contract StrategyEngine is
             }
         } else {
             // 计算利润
-            profit = amount - info.totalUsdcAmount;
+            profit = amount - info.totalUsdcDeposited;
 
-            withdrawUSDCAmount = info.totalUsdcAmount;
+            withdrawUSDCAmount = info.totalUsdcDeposited;
 
             // 更新用户信息
-            info.totalUsdcAmount = 0;
+            info.totalUsdcDeposited = 0;
         }
 
         if (profit > 0) {
@@ -485,8 +537,8 @@ contract StrategyEngine is
     {
         UserInfo storage info = userInfo[user];
         return (
-            info.totalWbtcAmount,
-            info.totalUsdcAmount,
+            info.totalWbtcDeposited,
+            info.totalUsdcDeposited,
             info.totalBorrowAmount,
             info.lastDepositTime
         );

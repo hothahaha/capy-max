@@ -37,6 +37,15 @@ contract MultiSigTest is Test {
         uint256 deadline
     );
 
+    event Upgraded(address indexed implementation);
+    event OwnershipTransferred(
+        address indexed previousOwner,
+        address indexed newOwner
+    );
+
+    error InvalidInitialization();
+    error OwnableUnauthorizedAccount(address account);
+
     function setUp() public {
         owner = makeAddr("owner");
         (signer2, signer2Key) = makeAddrAndKey("signer2");
@@ -50,7 +59,66 @@ contract MultiSigTest is Test {
     }
 
     function test_Initialize() public view {
+        assertEq(multiSig.owner(), vm.addr(signer1Key));
         assertEq(address(multiSig.signerManager()), address(signerManager));
+        assertEq(multiSig.nonce(), 0);
+    }
+
+    function test_Upgrade() public {
+        MultiSig newImpl = new MultiSig();
+
+        vm.expectEmit(true, true, true, true);
+        emit Upgraded(address(newImpl));
+
+        vm.prank(vm.addr(signer1Key));
+        multiSig.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_RevertWhen_ReinitializeMultiSig() public {
+        vm.expectRevert(InvalidInitialization.selector);
+        multiSig.initialize(address(signerManager));
+    }
+
+    function test_RevertWhen_UpgradeUnauthorized() public {
+        MultiSig newImpl = new MultiSig();
+        vm.prank(address(1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUnauthorizedAccount.selector,
+                address(1)
+            )
+        );
+        multiSig.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_RevertWhen_UpgradeToZeroAddress() public {
+        vm.prank(vm.addr(signer1Key));
+        vm.expectRevert(MultiSig.MultiSig__InvalidImplementation.selector);
+        multiSig.upgradeToAndCall(address(0), "");
+    }
+
+    function test_TransferOwnership() public {
+        address newOwner = makeAddr("newOwner");
+
+        vm.expectEmit(true, true, true, true);
+        emit OwnershipTransferred(vm.addr(signer1Key), newOwner);
+
+        vm.prank(vm.addr(signer1Key));
+        multiSig.transferOwnership(newOwner);
+
+        assertEq(multiSig.owner(), newOwner);
+    }
+
+    function test_RevertWhen_TransferOwnershipUnauthorized() public {
+        address newOwner = makeAddr("newOwner");
+        vm.prank(address(1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OwnableUnauthorizedAccount.selector,
+                address(1)
+            )
+        );
+        multiSig.transferOwnership(newOwner);
     }
 
     function test_ExecuteTransaction() public {
@@ -157,7 +225,7 @@ contract MultiSigTest is Test {
             address(multiSig),
             address(signerManager),
             addSignerData,
-            0,
+            multiSig.nonce(),
             deadline
         );
 
@@ -182,7 +250,7 @@ contract MultiSigTest is Test {
             address(multiSig),
             address(signerManager),
             updateThresholdData,
-            1,
+            multiSig.nonce(),
             deadline
         );
 
@@ -208,7 +276,7 @@ contract MultiSigTest is Test {
             address(multiSig),
             address(target),
             targetData,
-            2,
+            multiSig.nonce(),
             deadline
         );
 
@@ -259,7 +327,7 @@ contract MultiSigTest is Test {
             address(multiSig),
             address(signerManager),
             addSignerData,
-            0,
+            multiSig.nonce(),
             deadline
         );
 
@@ -284,7 +352,7 @@ contract MultiSigTest is Test {
             address(multiSig),
             address(signerManager),
             updateThresholdData,
-            1,
+            multiSig.nonce(),
             deadline
         );
 
@@ -310,7 +378,7 @@ contract MultiSigTest is Test {
             address(multiSig),
             address(target),
             targetData,
-            2,
+            multiSig.nonce(),
             deadline
         );
 
@@ -452,6 +520,7 @@ contract MultiSigTest is Test {
 
         assertTrue(target.called());
         assertEq(target.value(), 42);
+        assertTrue(signerManager.isSigner(signer2));
     }
 
     // Helper functions

@@ -68,8 +68,13 @@ contract DeployScript is Script {
     }
 
     function deployMultiSig(address signerManager) internal returns (MultiSig) {
-        MultiSig multiSug = new MultiSig(signerManager);
-        return multiSug;
+        MultiSig multiSigImpl = new MultiSig();
+        ERC1967Proxy multiSigProxy = new ERC1967Proxy(
+            address(multiSigImpl),
+            ""
+        );
+        MultiSig(address(multiSigProxy)).initialize(signerManager);
+        return MultiSig(address(multiSigProxy));
     }
 
     function deployCpToken() internal returns (CpToken) {

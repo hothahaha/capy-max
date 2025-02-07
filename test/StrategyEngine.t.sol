@@ -55,6 +55,13 @@ contract StrategyEngineTest is Test {
     uint256 public constant INITIAL_BALANCE = 1 ether;
 
     event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
+    event Deposited(
+        bytes32 indexed depositId,
+        address indexed user,
+        StrategyEngine.TokenType tokenType,
+        uint256 amount,
+        uint256 borrowAmount
+    );
 
     function setUp() public {
         (user, USER_PRIVATE_KEY) = makeAddrAndKey("user");
@@ -146,22 +153,6 @@ contract StrategyEngineTest is Test {
         assertGt(availableBorrowsBase, 0, "Should have available borrows");
         assertLt(healthFactor, 1e27, "Health factor should be less than 1");
 
-        // 验证存款记录
-        StrategyEngine.DepositRecord[] memory records = engine
-            .getUserDepositRecords(user);
-        assertEq(records.length, 1, "Should have one deposit record");
-        assertEq(
-            uint8(records[0].tokenType),
-            uint8(StrategyEngine.TokenType.WBTC),
-            "Incorrect token type"
-        );
-        assertEq(records[0].amount, amount, "Incorrect record amount");
-        assertGt(
-            records[0].borrowAmount,
-            0,
-            "Should have borrow amount in record"
-        );
-
         // 验证健康因子
         (, , , , , uint256 healthFactorAfterDeposit) = engine
             .getUserAccountData(user);
@@ -174,8 +165,72 @@ contract StrategyEngineTest is Test {
         vm.stopPrank();
     }
 
+    function test_WBTCDepositRecord() public {
+        uint256 amount = 1e7;
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 expectedDepositId = engine.generateDepositId(
+            user,
+            StrategyEngine.TokenType.WBTC,
+            amount,
+            block.timestamp
+        );
+
+        uint256 nonce = IERC20Permit(wbtc).nonces(user);
+
+        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
+            wbtc,
+            user,
+            address(engine),
+            amount,
+            nonce,
+            deadline,
+            USER_PRIVATE_KEY
+        );
+
+        vm.startPrank(user);
+        engine.deposit{value: GMX_EXECUTION_FEE}(
+            StrategyEngine.TokenType.WBTC,
+            amount,
+            0,
+            deadline,
+            v,
+            r,
+            s
+        );
+
+        // 验证存款记录
+        StrategyEngine.DepositRecord[] memory records = engine
+            .getUserDepositRecords(user);
+        assertEq(records.length, 1, "Should have one deposit record");
+        assertEq(
+            records[0].depositId,
+            expectedDepositId,
+            "Incorrect depositId"
+        );
+        assertEq(
+            uint8(records[0].tokenType),
+            uint8(StrategyEngine.TokenType.WBTC),
+            "Incorrect token type"
+        );
+        assertEq(records[0].amount, amount, "Incorrect record amount");
+        assertGt(
+            records[0].borrowAmount,
+            0,
+            "Should have borrow amount in record"
+        );
+        assertEq(records[0].depositId, expectedDepositId);
+
+        vm.stopPrank();
+    }
+
     function test_DepositUSDC() public {
         uint256 amount = 1000e6; // 1000 USDC
+        bytes32 expectedDepositId = engine.generateDepositId(
+            user,
+            StrategyEngine.TokenType.USDC,
+            amount,
+            block.timestamp
+        );
 
         vm.startPrank(user);
 
@@ -236,6 +291,7 @@ contract StrategyEngineTest is Test {
             0,
             "Should not have borrow amount in record"
         );
+        assertEq(records[0].depositId, expectedDepositId);
 
         vm.stopPrank();
     }

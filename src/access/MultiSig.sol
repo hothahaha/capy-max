@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {SignerManager} from "./SignerManager.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
-contract MultiSig {
+contract MultiSig is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
@@ -17,9 +20,11 @@ contract MultiSig {
     error MultiSig__ExecutionFailed();
     error MultiSig__InsufficientSignatures();
     error MultiSig__DuplicateSignature();
+    error MultiSig__InvalidImplementation();
+    error MultiSig__Unauthorized();
 
-    SignerManager public immutable signerManager;
-    uint256 public nonce;
+    SignerManager public signerManager;
+    uint256 private _nonce;
 
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256(
@@ -38,8 +43,24 @@ contract MultiSig {
         uint256 deadline
     );
 
-    constructor(address _signerManager) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address _signerManager) public initializer {
+        __Ownable_init(msg.sender);
+        __UUPSUpgradeable_init();
         signerManager = SignerManager(_signerManager);
+    }
+
+    function _authorizeUpgrade(
+        address newImplementation
+    ) internal view override onlyOwner {
+        // 检查新实现合约地址是否为零地址
+        if (newImplementation == address(0)) {
+            revert MultiSig__InvalidImplementation();
+        }
     }
 
     function executeTransaction(
@@ -60,7 +81,7 @@ contract MultiSig {
             revert MultiSig__InsufficientSignatures();
 
         // 计算交易哈希
-        bytes32 txHash = _hashTransaction(to, data, nonce, deadline);
+        bytes32 txHash = _hashTransaction(to, data, _nonce, deadline);
         bytes32 ethSignedHash = txHash.toEthSignedMessageHash();
 
         // 验证签名
@@ -86,28 +107,28 @@ contract MultiSig {
         }
 
         // 增加nonce
-        nonce++;
+        _nonce++;
 
         // 执行交易
         (bool success, ) = to.call(data);
         if (!success) revert MultiSig__ExecutionFailed();
 
-        emit TransactionExecuted(to, data, nonce - 1, deadline);
+        emit TransactionExecuted(to, data, _nonce - 1, deadline);
     }
 
     function hashTransaction(
         address to,
         bytes calldata data,
-        uint256 _nonce,
+        uint256 nonce_,
         uint256 deadline
     ) external view returns (bytes32) {
-        return _hashTransaction(to, data, _nonce, deadline);
+        return _hashTransaction(to, data, nonce_, deadline);
     }
 
     function _hashTransaction(
         address to,
         bytes calldata data,
-        uint256 _nonce,
+        uint256 nonce_,
         uint256 deadline
     ) internal view returns (bytes32) {
         bytes32 domainSeparator = keccak256(
@@ -125,7 +146,7 @@ contract MultiSig {
                 TRANSACTION_TYPEHASH,
                 to,
                 keccak256(data),
-                _nonce,
+                nonce_,
                 deadline
             )
         );
@@ -151,5 +172,9 @@ contract MultiSig {
         }
 
         return ecrecover(hash, v, r, s);
+    }
+
+    function nonce() external view returns (uint256) {
+        return _nonce;
     }
 }
