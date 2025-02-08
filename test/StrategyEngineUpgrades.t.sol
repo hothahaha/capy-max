@@ -11,10 +11,13 @@ import {SignerManager} from "../src/access/SignerManager.sol";
 import {MultiSig} from "../src/access/MultiSig.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {UUPSUpgradeableBase} from "../src/upgradeable/UUPSUpgradeableBase.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 contract StrategyEngineV2 is StrategyEngine {
     // 添加新功能用于测试升级
     uint256 public newVariable;
+    bool public newFunctionCalled;
 
     function setNewVariable(uint256 _value) external {
         newVariable = _value;
@@ -27,6 +30,10 @@ contract StrategyEngineV2 is StrategyEngine {
     // 添加新的平台费用相关函数
     function getDefaultPlatformFee() external pure returns (uint256) {
         return 1000; // 10%
+    }
+
+    function newFunction() external {
+        newFunctionCalled = true;
     }
 }
 
@@ -94,57 +101,94 @@ contract StrategyEngineUpgradesTest is Test {
     }
 
     function test_UpgradeToV2() public {
-        vm.startPrank(vm.addr(deployerKey));
-
-        // 设置初始平台费用
-        engine.updatePlatformFee(1000);
-
         // 部署新版本合约
-        StrategyEngineV2 engineV2 = new StrategyEngineV2();
+        StrategyEngineV2 newImplementation = new StrategyEngineV2();
+        uint256 deadline = block.timestamp + 1 days;
 
-        // 升级到新版本
-        engine.upgradeToAndCall(address(engineV2), "");
-
-        // 验证升级后的功能
-        StrategyEngineV2 upgradedEngine = StrategyEngineV2(address(engine));
-        assertEq(upgradedEngine.version(), "V2");
-
-        // 验证原有功能保持不变
-        assertEq(
-            upgradedEngine.getPlatformFee(),
-            1000,
-            "Platform fee changed after upgrade"
-        );
-        assertTrue(
-            signerManager.isSigner(vm.addr(deployerKey)),
-            "Signer status lost after upgrade"
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            address(newImplementation),
+            ""
         );
 
-        // 验证新功能
-        assertEq(
-            upgradedEngine.getDefaultPlatformFee(),
-            1000,
-            "Default platform fee incorrect"
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
         );
 
-        engine.updatePlatformFee(500);
+        signatures[0] = _signTransaction(deployerKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
 
-        assertEq(
-            upgradedEngine.getPlatformFee(),
-            500,
-            "Platform fee update failed after upgrade"
+        // 执行升级
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
         );
 
-        vm.stopPrank();
+        // 验证升级后的新功能
+        StrategyEngineV2(address(engine)).newFunction();
+        assertTrue(StrategyEngineV2(address(engine)).newFunctionCalled());
     }
 
     function test_UpgradePreservesState() public {
-        vm.startPrank(vm.addr(deployerKey));
+        vm.prank(vm.addr(deployerKey));
         engine.updatePlatformFee(800);
 
         StrategyEngineV2 engineV2 = new StrategyEngineV2();
-        engine.upgradeToAndCall(address(engineV2), "");
-        vm.stopPrank();
+
+        uint256 deadline = block.timestamp + 1 days;
+
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            address(engineV2),
+            ""
+        );
+
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+
+        // 添加第二个签名者并设置阈值
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        // 确保使用正确的签名顺序
+        address deployer = vm.addr(deployerKey);
+        require(signerManager.isSigner(deployer), "Deployer not a signer");
+        require(signerManager.isSigner(signer2), "Signer2 not a signer");
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        signatures[0] = _signTransaction(deployerKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
+
+        // 执行升级
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
+        );
 
         // 验证状态保持
         StrategyEngineV2 upgradedEngine = StrategyEngineV2(address(engine));
@@ -172,12 +216,63 @@ contract StrategyEngineUpgradesTest is Test {
     }
 
     function test_StorageSlotConsistency() public {
-        vm.startPrank(vm.addr(deployerKey));
+        // 设置初始状态
+        vm.prank(vm.addr(deployerKey));
         engine.updatePlatformFee(800);
 
         // 升级到新版本
         StrategyEngineV2 newImplementation = new StrategyEngineV2();
-        engine.upgradeToAndCall(address(newImplementation), "");
+
+        // 确保部署者是签名者
+        address deployer = vm.addr(deployerKey);
+        if (!signerManager.isSigner(deployer)) {
+            console2.log("Adding deployer as signer:", deployer);
+            _addSigner(deployer);
+        }
+
+        uint256 deadline = block.timestamp + 1 days;
+
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            address(newImplementation),
+            ""
+        );
+
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+
+        // 添加第二个签名者并设置阈值
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        // 验证签名者状态
+        require(
+            signerManager.isSigner(signer2),
+            "Signer2 not added successfully"
+        );
+        console2.log("Deployer address:", deployer);
+        console2.log("Signer2 address:", signer2);
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        signatures[0] = _signTransaction(deployerKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
+
+        // 执行升级
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
+        );
 
         // 验证原有数据保持不变
         assertEq(engine.owner(), vm.addr(deployerKey));
@@ -188,17 +283,15 @@ contract StrategyEngineUpgradesTest is Test {
         );
 
         // 验证可以使用新功能
+        vm.prank(vm.addr(deployerKey));
         StrategyEngineV2(address(engine)).setNewVariable(123);
         assertEq(StrategyEngineV2(address(engine)).newVariable(), 123);
-
-        vm.stopPrank();
     }
 
     function test_UpgradeToAndCall() public {
-        vm.startPrank(vm.addr(deployerKey));
-
         StrategyEngineV2 newImplementation = new StrategyEngineV2();
 
+        vm.prank(vm.addr(deployerKey));
         engine.updatePlatformFee(700);
 
         // 准备初始化数据
@@ -207,8 +300,46 @@ contract StrategyEngineUpgradesTest is Test {
             999
         );
 
-        // 升级并调用初始化函数
-        engine.upgradeToAndCall(address(newImplementation), data);
+        uint256 deadline = block.timestamp + 1 days;
+
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            address(newImplementation),
+            data
+        );
+
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+
+        // 添加第二个签名者并设置阈值
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        // 确保使用正确的签名顺序
+        address deployer = vm.addr(deployerKey);
+        require(signerManager.isSigner(deployer), "Deployer not a signer");
+        require(signerManager.isSigner(signer2), "Signer2 not a signer");
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        signatures[0] = _signTransaction(deployerKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
+
+        // 执行升级
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
+        );
 
         // 验证初始化是否成功
         assertEq(StrategyEngineV2(address(engine)).newVariable(), 999);
@@ -221,8 +352,6 @@ contract StrategyEngineUpgradesTest is Test {
             signerManager.isSigner(vm.addr(deployerKey)),
             "Signer status lost"
         );
-
-        vm.stopPrank();
     }
 
     function test_ProxyAdmin() public view {
@@ -233,52 +362,189 @@ contract StrategyEngineUpgradesTest is Test {
     }
 
     function test_RevertWhen_UpgradeToSameImplementation() public {
-        vm.startPrank(vm.addr(deployerKey));
-
         // 获取当前实现合约地址
         bytes32 implSlot = vm.load(address(engine), IMPLEMENTATION_SLOT);
         address currentImpl = address(uint160(uint256(implSlot)));
 
-        vm.expectRevert(
-            StrategyEngine.StrategyEngine__InvalidImplementation.selector
+        // 先添加签名者并设置阈值
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        uint256 deadline = block.timestamp + 1 days;
+
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            currentImpl,
+            ""
         );
-        engine.upgradeToAndCall(currentImpl, "");
-        vm.stopPrank();
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+
+        // 确保使用正确的签名顺序
+        address deployer = vm.addr(deployerKey);
+        require(signerManager.isSigner(deployer), "Deployer not a signer");
+        require(signerManager.isSigner(signer2), "Signer2 not a signer");
+
+        signatures[0] = _signTransaction(deployerKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
+
+        vm.expectRevert(MultiSig.MultiSig__ExecutionFailed.selector);
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
+        );
     }
 
     function test_UpgradeEvent() public {
-        vm.startPrank(vm.addr(deployerKey));
         StrategyEngineV2 engineV2 = new StrategyEngineV2();
+
+        uint256 deadline = block.timestamp + 1 days;
+
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            address(engineV2),
+            ""
+        );
+
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        // 确保使用正确的签名顺序
+        address deployer = vm.addr(deployerKey);
+        require(signerManager.isSigner(deployer), "Deployer not a signer");
+        require(signerManager.isSigner(signer2), "Signer2 not a signer");
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        signatures[0] = _signTransaction(deployerKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
 
         vm.expectEmit(true, true, true, true);
         emit Upgraded(address(engineV2));
 
-        engine.upgradeToAndCall(address(engineV2), "");
-        vm.stopPrank();
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
+        );
     }
 
     function test_UpgradeWithEmptyData() public {
-        vm.startPrank(vm.addr(deployerKey));
         StrategyEngineV2 engineV2 = new StrategyEngineV2();
-        engine.upgradeToAndCall(address(engineV2), "");
+
+        // 先添加签名者并设置阈值
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        uint256 deadline = block.timestamp + 1 days;
+
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            engineV2,
+            ""
+        );
+
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+
+        // 确保使用正确的签名顺序
+        address deployer = vm.addr(deployerKey);
+        require(signerManager.isSigner(deployer), "Deployer not a signer");
+        require(signerManager.isSigner(signer2), "Signer2 not a signer");
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        signatures[0] = _signTransaction(deployerKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
+
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
+        );
 
         // 验证升级成功
         bytes32 implSlot = vm.load(address(engine), IMPLEMENTATION_SLOT);
         address currentImpl = address(uint160(uint256(implSlot)));
         assertEq(currentImpl, address(engineV2));
-        vm.stopPrank();
     }
 
     function test_RevertWhen_UpgradeUnauthorized() public {
         // 先部署新合约
         StrategyEngineV2 engineV2 = new StrategyEngineV2();
 
-        // 然后以 user 身份尝试升级
-        vm.prank(user);
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user)
+        uint256 deadline = block.timestamp + 1 days;
+
+        // 构造升级数据
+        bytes memory upgradeData = abi.encodeWithSelector(
+            engine.upgradeToAndCall.selector,
+            address(engineV2),
+            ""
         );
-        engine.upgradeToAndCall(address(engineV2), "");
+
+        // 生成签名
+        bytes[] memory signatures = new bytes[](2);
+        (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
+
+        // 添加第二个签名者并设置阈值
+        _addSigner(signer2);
+        _updateThreshold(2);
+
+        // 使用未授权的签名者生成签名
+        (, uint256 unauthorizedKey) = makeAddrAndKey("unauthorized");
+
+        // 获取交易哈希
+        bytes32 txHash = multiSig.hashTransaction(
+            address(engine),
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        signatures[0] = _signTransaction(unauthorizedKey, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
+
+        vm.expectRevert(MultiSig.MultiSig__InvalidSignature.selector);
+        multiSig.executeTransaction(
+            address(engine),
+            upgradeData,
+            deadline,
+            signatures
+        );
     }
 
     function test_RevertWhen_InitializeAgain() public {
@@ -317,5 +583,57 @@ contract StrategyEngineUpgradesTest is Test {
     ) internal pure returns (bytes memory) {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
         return abi.encodePacked(r, s, v);
+    }
+
+    function _addSigner(address signer) internal {
+        bytes memory data = abi.encodeWithSelector(
+            SignerManager.addSigner.selector,
+            signer
+        );
+        uint256 deadline = block.timestamp + 1 days;
+
+        bytes32 txHash = multiSig.hashTransaction(
+            address(signerManager),
+            data,
+            multiSig.nonce(),
+            deadline
+        );
+
+        bytes[] memory signatures = new bytes[](1);
+        signatures[0] = _signTransaction(deployerKey, txHash);
+
+        vm.prank(vm.addr(deployerKey));
+        multiSig.executeTransaction(
+            address(signerManager),
+            data,
+            deadline,
+            signatures
+        );
+    }
+
+    function _updateThreshold(uint256 newThreshold) internal {
+        bytes memory data = abi.encodeWithSelector(
+            SignerManager.updateThreshold.selector,
+            newThreshold
+        );
+        uint256 deadline = block.timestamp + 1 days;
+
+        bytes32 txHash = multiSig.hashTransaction(
+            address(signerManager),
+            data,
+            multiSig.nonce(),
+            deadline
+        );
+
+        bytes[] memory signatures = new bytes[](1);
+        signatures[0] = _signTransaction(deployerKey, txHash);
+
+        vm.prank(vm.addr(deployerKey));
+        multiSig.executeTransaction(
+            address(signerManager),
+            data,
+            deadline,
+            signatures
+        );
     }
 }

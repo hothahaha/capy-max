@@ -48,9 +48,13 @@ contract DeployScript is Script {
         );
 
         // 设置所有权
+        vault.transferUpgradeRights(address(multiSig));
+        engine.transferUpgradeRights(address(multiSig));
+
+        // 将 SignerManager 的所有权转移给 engine
         cpToken.transferOwnership(address(engine));
-        vault.transferOwnership(address(engine));
         signerManager.transferOwnership(address(engine));
+
         vm.stopBroadcast();
     }
 

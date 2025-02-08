@@ -3,8 +3,7 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/console2.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeableBase} from "./upgradeable/UUPSUpgradeableBase.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -27,8 +26,7 @@ import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.s
 /// @notice Manages yield generation through AAVE and HyperLiquid
 contract StrategyEngine is
     Initializable,
-    UUPSUpgradeable,
-    OwnableUpgradeable,
+    UUPSUpgradeableBase,
     ReentrancyGuardUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -129,9 +127,8 @@ contract StrategyEngine is
         address _vault,
         address _signerManager
     ) public initializer {
-        __Ownable_init(msg.sender);
+        __UUPSUpgradeableBase_init(msg.sender);
         __ReentrancyGuard_init();
-        __UUPSUpgradeable_init();
 
         // 设置初始平台费用
         platformFeePercentage = 1000;
@@ -146,24 +143,6 @@ contract StrategyEngine is
         cpToken = CpToken(_cpToken);
         vault = Vault(_vault);
         signerManager = SignerManager(_signerManager);
-    }
-
-    /// @notice 实现 UUPS 升级功能
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal view override onlyOwner {
-        // 获取当前实现合约地址
-        address currentImpl = ERC1967Utils.getImplementation();
-
-        // 检查新实现地址是否与当前实现相同
-        if (newImplementation == currentImpl) {
-            revert StrategyEngine__InvalidImplementation();
-        }
-
-        // 检查新实现合约地址是否为零地址
-        if (newImplementation == address(0)) {
-            revert StrategyEngine__InvalidImplementation();
-        }
     }
 
     function generateDepositId(
@@ -587,5 +566,10 @@ contract StrategyEngine is
     /// @return 当前费用比例，基点制(10000 = 100%)
     function getPlatformFee() external view returns (uint256) {
         return platformFeePercentage;
+    }
+
+    /// @notice 获取当前实现合约地址
+    function implementation() external view returns (address) {
+        return ERC1967Utils.getImplementation();
     }
 }

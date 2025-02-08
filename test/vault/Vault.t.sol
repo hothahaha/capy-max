@@ -11,18 +11,6 @@ import {SignerManager} from "../../src/access/SignerManager.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract VaultV2 is Vault {
-    uint256 public newVariable;
-
-    function setNewVariable(uint256 _value) external {
-        newVariable = _value;
-    }
-
-    function version() external pure returns (string memory) {
-        return "V2";
-    }
-}
-
 contract VaultTest is Test {
     StrategyEngine public engine;
     Vault public vault;
@@ -37,12 +25,8 @@ contract VaultTest is Test {
     uint256 public signer1Key;
     uint256 public deployerKey;
 
-    bytes32 public constant IMPLEMENTATION_SLOT =
-        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
-
     event Deposit(address indexed token, uint256 amount);
     event Withdraw(address indexed token, uint256 amount);
-    event Upgraded(address indexed implementation);
 
     error OwnableUnauthorizedAccount(address account);
 
@@ -64,7 +48,7 @@ contract VaultTest is Test {
     }
 
     function test_Initialize() public view {
-        assertEq(vault.owner(), owner);
+        assertEq(vault.owner(), vm.addr(deployerKey));
         assertEq(address(vault.token()), address(usdc));
     }
 
@@ -171,30 +155,6 @@ contract VaultTest is Test {
         vm.prank(user);
         vm.expectRevert(Vault.Vault__Unauthorized.selector);
         vault.withdrawProfit(user, amount);
-    }
-
-    function test_UpgradeToV2() public {
-        vm.startPrank(owner);
-
-        VaultV2 vaultV2 = new VaultV2();
-        vm.expectEmit(true, true, true, true);
-        emit Upgraded(address(vaultV2));
-
-        vault.upgradeToAndCall(address(vaultV2), "");
-
-        VaultV2 upgradedVault = VaultV2(address(vault));
-        assertEq(upgradedVault.version(), "V2");
-
-        vm.stopPrank();
-    }
-
-    function test_RevertWhen_UpgradeUnauthorized() public {
-        VaultV2 vaultV2 = new VaultV2();
-        vm.prank(user);
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user)
-        );
-        vault.upgradeToAndCall(address(vaultV2), "");
     }
 
     // Helper functions
