@@ -7,18 +7,6 @@ import {StrategyEngine} from "../../src/StrategyEngine.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 
-contract CpTokenV2 is CpToken {
-    uint256 public newVariable;
-
-    function setNewVariable(uint256 _value) external {
-        newVariable = _value;
-    }
-
-    function version() external pure returns (string memory) {
-        return "V2";
-    }
-}
-
 contract CpTokenTest is Test {
     StrategyEngine public engine;
     CpToken public cpToken;
@@ -26,9 +14,6 @@ contract CpTokenTest is Test {
     HelperConfig public helperConfig;
     address public owner;
     address public user;
-
-    bytes32 public constant IMPLEMENTATION_SLOT =
-        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Upgraded(address indexed implementation);
@@ -120,35 +105,5 @@ contract CpTokenTest is Test {
         vm.expectRevert(CpToken.CpToken__TransferNotAllowed.selector);
         cpToken.transferFrom(user, owner, 50e18);
         vm.stopPrank();
-    }
-
-    function test_UpgradeToV2() public {
-        vm.startPrank(address(engine));
-
-        CpTokenV2 tokenV2 = new CpTokenV2();
-        vm.expectEmit(true, true, true, true);
-        emit Upgraded(address(tokenV2));
-
-        cpToken.upgradeToAndCall(address(tokenV2), "");
-
-        CpTokenV2 upgradedToken = CpTokenV2(address(cpToken));
-        assertEq(upgradedToken.version(), "V2");
-
-        vm.stopPrank();
-    }
-
-    function test_RevertWhen_UpgradeUnauthorized() public {
-        CpTokenV2 tokenV2 = new CpTokenV2();
-        vm.prank(user);
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user)
-        );
-        cpToken.upgradeToAndCall(address(tokenV2), "");
-    }
-
-    function test_RevertWhen_InvalidUpgrade() public {
-        vm.prank(owner);
-        vm.expectRevert(CpToken.CpToken__InvalidUpgrade.selector);
-        cpToken.upgradeToAndCall(address(0), "");
     }
 }

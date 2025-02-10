@@ -1,24 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {UUPSUpgradeableBase} from "../upgradeable/UUPSUpgradeableBase.sol";
 
 /// @title CpToken
 /// @notice Non-transferable token representing user's deposit position
-contract CpToken is
-    Initializable,
-    ERC20Upgradeable,
-    OwnableUpgradeable,
-    UUPSUpgradeable
-{
+contract CpToken is ERC20Upgradeable, UUPSUpgradeableBase {
     // Errors
     error CpToken__Unauthorized();
     error CpToken__InvalidAmount();
     error CpToken__TransferNotAllowed();
-    error CpToken__InvalidUpgrade();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -26,12 +18,12 @@ contract CpToken is
     }
 
     function initialize(
+        address initialOwner,
         string memory name,
         string memory symbol
-    ) public initializer {
+    ) external initializer {
+        __UUPSUpgradeableBase_init(initialOwner);
         __ERC20_init(name, symbol);
-        __Ownable_init(msg.sender);
-        __UUPSUpgradeable_init();
     }
 
     /// @notice Mint tokens to a user
@@ -67,11 +59,5 @@ contract CpToken is
     /// @notice Override approve to prevent approvals
     function approve(address, uint256) public pure override returns (bool) {
         revert CpToken__TransferNotAllowed();
-    }
-
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal view override onlyOwner {
-        if (newImplementation == address(0)) revert CpToken__InvalidUpgrade();
     }
 }

@@ -48,7 +48,7 @@ contract VaultTest is Test {
     }
 
     function test_Initialize() public view {
-        assertEq(vault.owner(), vm.addr(deployerKey));
+        assertEq(vault.owner(), owner);
         assertEq(address(vault.token()), address(usdc));
     }
 

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeableBase} from "../upgradeable/UUPSUpgradeableBase.sol";
 import {SignerManager} from "./SignerManager.sol";
+
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
-contract MultiSig is Initializable, UUPSUpgradeable, OwnableUpgradeable {
+contract MultiSig is UUPSUpgradeableBase {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
@@ -20,8 +19,6 @@ contract MultiSig is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     error MultiSig__ExecutionFailed();
     error MultiSig__InsufficientSignatures();
     error MultiSig__DuplicateSignature();
-    error MultiSig__InvalidImplementation();
-    error MultiSig__Unauthorized();
 
     SignerManager public signerManager;
     uint256 private _nonce;
@@ -48,19 +45,12 @@ contract MultiSig is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         _disableInitializers();
     }
 
-    function initialize(address _signerManager) public initializer {
-        __Ownable_init(msg.sender);
-        __UUPSUpgradeable_init();
+    function initialize(
+        address initialOwner,
+        address _signerManager
+    ) external initializer {
+        __UUPSUpgradeableBase_init(initialOwner);
         signerManager = SignerManager(_signerManager);
-    }
-
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal view override onlyOwner {
-        // 检查新实现合约地址是否为零地址
-        if (newImplementation == address(0)) {
-            revert MultiSig__InvalidImplementation();
-        }
     }
 
     function executeTransaction(

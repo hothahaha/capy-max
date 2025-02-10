@@ -3,13 +3,11 @@ pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeableBase} from "./upgradeable/UUPSUpgradeableBase.sol";
 
 import {IAavePool} from "./aave/interface/IAavePool.sol";
 
-contract UserPosition is Initializable, UUPSUpgradeable, OwnableUpgradeable {
+contract UserPosition is UUPSUpgradeableBase {
     using SafeERC20 for IERC20;
 
     // 将 immutable 变量改为状态变量
@@ -18,25 +16,22 @@ contract UserPosition is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     error UserPosition__Unauthorized();
     error UserPosition__TransferFailed();
+    error UserPosition__InvalidAmount();
+    error UserPosition__TransferNotAllowed();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address _user) public initializer {
-        __Ownable_init(msg.sender); // 设置 strategy 为 owner
-        __UUPSUpgradeable_init();
-
-        strategy = msg.sender;
+    function initialize(
+        address initialOwner,
+        address _strategy,
+        address _user
+    ) external initializer {
+        __UUPSUpgradeableBase_init(initialOwner);
+        strategy = _strategy;
         user = _user;
-    }
-
-    /// @notice 实现 UUPS 升级功能
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {
-        // 可以添加额外的升级条件
     }
 
     modifier onlyStrategy() {

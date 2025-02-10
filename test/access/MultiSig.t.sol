@@ -6,6 +6,7 @@ import {MultiSig} from "../../src/access/MultiSig.sol";
 import {SignerManager} from "../../src/access/SignerManager.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
+import {UUPSUpgradeableBase} from "../../src/upgradeable/UUPSUpgradeableBase.sol";
 
 contract MockTarget {
     uint256 public value;
@@ -62,37 +63,9 @@ contract MultiSigTest is Test {
         assertEq(multiSig.nonce(), 0);
     }
 
-    function test_Upgrade() public {
-        MultiSig newImpl = new MultiSig();
-
-        vm.expectEmit(true, true, true, true);
-        emit Upgraded(address(newImpl));
-
-        vm.prank(vm.addr(signer1Key));
-        multiSig.upgradeToAndCall(address(newImpl), "");
-    }
-
     function test_RevertWhen_ReinitializeMultiSig() public {
         vm.expectRevert(InvalidInitialization.selector);
-        multiSig.initialize(address(signerManager));
-    }
-
-    function test_RevertWhen_UpgradeUnauthorized() public {
-        MultiSig newImpl = new MultiSig();
-        vm.prank(address(1));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                OwnableUnauthorizedAccount.selector,
-                address(1)
-            )
-        );
-        multiSig.upgradeToAndCall(address(newImpl), "");
-    }
-
-    function test_RevertWhen_UpgradeToZeroAddress() public {
-        vm.prank(vm.addr(signer1Key));
-        vm.expectRevert(MultiSig.MultiSig__InvalidImplementation.selector);
-        multiSig.upgradeToAndCall(address(0), "");
+        multiSig.initialize(signer1, address(signerManager));
     }
 
     function test_TransferOwnership() public {

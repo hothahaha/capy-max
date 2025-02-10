@@ -532,6 +532,8 @@ contract StrategyEngine is
         // 部署代理合约
         bytes memory initData = abi.encodeWithSelector(
             UserPosition.initialize.selector,
+            user,
+            address(this),
             user
         );
 

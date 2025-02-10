@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {UUPSUpgradeableBase} from "../upgradeable/UUPSUpgradeableBase.sol";
 import {MultiSig} from "./MultiSig.sol";
 
-contract SignerManager is Initializable, OwnableUpgradeable, UUPSUpgradeable {
+contract SignerManager is UUPSUpgradeableBase {
     error SignerManager__InvalidSigner();
     error SignerManager__SignerAlreadyExists();
     error SignerManager__SignerDoesNotExist();
     error SignerManager__InvalidThreshold();
     error SignerManager__Unauthorized();
+    error SignerManager__InvalidMultiSig();
 
     MultiSig public multiSig;
     uint256 private threshold;
@@ -21,6 +20,7 @@ contract SignerManager is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     event SignerAdded(address indexed signer);
     event SignerRemoved(address indexed signer);
     event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+    event MultiSigUpdated(address indexed newMultiSig);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -28,26 +28,21 @@ contract SignerManager is Initializable, OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function initialize(
-        address _initialSigner,
+        address initialSigner,
         uint256 _threshold
-    ) public initializer {
-        __Ownable_init(msg.sender);
-        __UUPSUpgradeable_init();
+    ) external initializer {
+        __UUPSUpgradeableBase_init(initialSigner);
 
-        if (_initialSigner == address(0)) revert SignerManager__InvalidSigner();
+        if (initialSigner == address(0)) revert SignerManager__InvalidSigner();
         if (_threshold == 0) revert SignerManager__InvalidThreshold();
 
-        signers[_initialSigner] = true;
+        signers[initialSigner] = true;
         signerCount = 1;
         threshold = _threshold;
 
-        emit SignerAdded(_initialSigner);
-        emit ThresholdUpdated(0, _threshold);
+        emit SignerAdded(initialSigner);
+        emit ThresholdUpdated(0, threshold);
     }
-
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal override onlyOwner {}
 
     modifier onlyMultiSig() {
         if (msg.sender != address(multiSig))
@@ -57,6 +52,7 @@ contract SignerManager is Initializable, OwnableUpgradeable, UUPSUpgradeable {
 
     function setMultiSig(address _multiSig) external onlyOwner {
         multiSig = MultiSig(_multiSig);
+        emit MultiSigUpdated(_multiSig);
     }
 
     function addSigner(address _signer) external onlyMultiSig {

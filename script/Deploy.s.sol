@@ -34,10 +34,10 @@ contract DeployScript is Script {
 
         // 部署合约
         signerManager = deploySignerManager(initialSigner);
-        multiSig = deployMultiSig(address(signerManager));
+        multiSig = deployMultiSig(initialSigner, address(signerManager));
         signerManager.setMultiSig(address(multiSig));
 
-        cpToken = deployCpToken();
+        cpToken = deployCpToken(initialSigner);
         vault = deployVault(usdcAddress, address(multiSig));
         engine = deployStrategyEngine(
             wbtcAddress,
@@ -48,11 +48,15 @@ contract DeployScript is Script {
         );
 
         // 设置所有权
+        multiSig.transferUpgradeRights(address(multiSig));
+        signerManager.transferUpgradeRights(address(multiSig));
         vault.transferUpgradeRights(address(multiSig));
+        cpToken.transferUpgradeRights(address(multiSig));
         engine.transferUpgradeRights(address(multiSig));
 
         // 将 SignerManager 的所有权转移给 engine
         cpToken.transferOwnership(address(engine));
+        vault.transferOwnership(address(engine));
         signerManager.transferOwnership(address(engine));
 
         vm.stopBroadcast();
@@ -71,20 +75,30 @@ contract DeployScript is Script {
         return manager;
     }
 
-    function deployMultiSig(address signerManager) internal returns (MultiSig) {
+    function deployMultiSig(
+        address initialSigner,
+        address signerManager
+    ) internal returns (MultiSig) {
         MultiSig multiSigImpl = new MultiSig();
         ERC1967Proxy multiSigProxy = new ERC1967Proxy(
             address(multiSigImpl),
             ""
         );
-        MultiSig(address(multiSigProxy)).initialize(signerManager);
+        MultiSig(address(multiSigProxy)).initialize(
+            initialSigner,
+            signerManager
+        );
         return MultiSig(address(multiSigProxy));
     }
 
-    function deployCpToken() internal returns (CpToken) {
+    function deployCpToken(address initialSigner) internal returns (CpToken) {
         CpToken cpTokenImpl = new CpToken();
         ERC1967Proxy cpTokenProxy = new ERC1967Proxy(address(cpTokenImpl), "");
-        CpToken(address(cpTokenProxy)).initialize("Compound BTC", "cpBTC");
+        CpToken(address(cpTokenProxy)).initialize(
+            initialSigner,
+            "Compound BTC",
+            "cpBTC"
+        );
         return CpToken(address(cpTokenProxy));
     }
 
