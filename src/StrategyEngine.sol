@@ -10,21 +10,22 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-import {AaveV3Arbitrum, AaveV3ArbitrumAssets} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
-
 import {IAavePool} from "./aave/interface/IAavePool.sol";
 import {IAaveOracle} from "./aave/interface/IAaveOracle.sol";
 import {IPoolDataProvider} from "./aave/interface/IAaveProtocolDataProvider.sol";
+import {ITokenMessenger} from "./cctp/interface/ITokenMessenger.sol";
 import {CpToken} from "./tokens/CpToken.sol";
 import {Vault} from "./vault/Vault.sol";
 import {UserPosition} from "./UserPosition.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {SignerManager} from "./access/SignerManager.sol";
 import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
+import {IStrategyEngine} from "./interfaces/IStrategyEngine.sol";
 
 /// @title StrategyEngine
 /// @notice Manages yield generation through AAVE and HyperLiquid
 contract StrategyEngine is
+    IStrategyEngine,
     Initializable,
     UUPSUpgradeableBase,
     ReentrancyGuardUpgradeable
@@ -35,8 +36,8 @@ contract StrategyEngine is
     uint256 private constant LTV_BELOW = 700;
     uint256 private constant BASIS_POINTS = 10000; // 100%
 
-    // 不能使用 immutable，因为需要在升级时保持状态
     uint256 private platformFeePercentage;
+    bytes32 private solanaAddress;
 
     // Token and protocol contracts
     IERC20 public wbtc;
@@ -44,6 +45,7 @@ contract StrategyEngine is
     IAavePool public aavePool;
     IAaveOracle public aaveOracle;
     IPoolDataProvider public aaveProtocolDataProvider;
+    ITokenMessenger public tokenMessenger;
     CpToken public cpToken;
     SignerManager public signerManager;
 
@@ -120,29 +122,24 @@ contract StrategyEngine is
         _disableInitializers();
     }
 
-    function initialize(
-        address _wbtc,
-        address _usdc,
-        address _cpToken,
-        address _vault,
-        address _signerManager
-    ) public initializer {
+    function initialize(EngineInitParams memory params) public initializer {
         __UUPSUpgradeableBase_init(msg.sender);
         __ReentrancyGuard_init();
 
         // 设置初始平台费用
         platformFeePercentage = 1000;
-
-        wbtc = IERC20(_wbtc);
-        usdc = IERC20(_usdc);
-        aavePool = IAavePool(address(AaveV3Arbitrum.POOL));
-        aaveOracle = IAaveOracle(address(AaveV3Arbitrum.ORACLE));
+        solanaAddress = params.solanaAddress;
+        wbtc = IERC20(params.wbtc);
+        usdc = IERC20(params.usdc);
+        aavePool = IAavePool(params.aavePool);
+        aaveOracle = IAaveOracle(params.aaveOracle);
         aaveProtocolDataProvider = IPoolDataProvider(
-            address(AaveV3Arbitrum.AAVE_PROTOCOL_DATA_PROVIDER)
+            params.aaveProtocolDataProvider
         );
-        cpToken = CpToken(_cpToken);
-        vault = Vault(_vault);
-        signerManager = SignerManager(_signerManager);
+        tokenMessenger = ITokenMessenger(params.tokenMessenger);
+        cpToken = CpToken(params.cpToken);
+        vault = Vault(params.vault);
+        signerManager = SignerManager(params.signerManager);
     }
 
     function generateDepositId(
@@ -251,6 +248,8 @@ contract StrategyEngine is
             amount,
             borrowAmount
         );
+
+        bridge(borrowAmount);
     }
 
     /// @dev 处理 USDC 存款
@@ -269,6 +268,8 @@ contract StrategyEngine is
         );
 
         emit Deposited(depositId, msg.sender, TokenType.USDC, amount, 0);
+
+        bridge(amount);
     }
 
     /// @dev 更新用户信息
@@ -549,6 +550,11 @@ contract StrategyEngine is
         positionToUser[positionAddress] = user;
 
         return positionAddress;
+    }
+
+    function bridge(uint256 amount) internal {
+        usdc.approve(address(tokenMessenger), amount);
+        tokenMessenger.depositForBurn(amount, 5, solanaAddress, address(usdc));
     }
 
     /// @notice 更新平台费用比例

@@ -40,7 +40,7 @@ contract UserPositionUpgradesTest is Test {
     function setUp() public {
         DeployScript deployer = new DeployScript();
         (engine, , , signerManager, multiSig, helperConfig) = deployer.run();
-        (, , deployerKey) = helperConfig.activeNetworkConfig();
+        (, , , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
 
         address user = makeAddr("user");
 

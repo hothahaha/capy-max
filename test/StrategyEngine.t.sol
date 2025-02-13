@@ -77,7 +77,8 @@ contract StrategyEngineTest is Test {
             helperConfig
         ) = deployer.run();
 
-        (wbtc, usdc, DEPLOYER_PRIVATE_KEY) = helperConfig.activeNetworkConfig();
+        (wbtc, usdc, , , , DEPLOYER_PRIVATE_KEY, , ) = helperConfig
+            .activeNetworkConfig();
 
         DEPLOYER = vm.addr(DEPLOYER_PRIVATE_KEY);
 
@@ -425,6 +426,8 @@ contract StrategyEngineTest is Test {
             "Incorrect WBTC balance change"
         );
 
+        deal(address(usdc), address(engine), totalBorrows);
+
         // 提款
         engine.withdraw(StrategyEngine.TokenType.WBTC, user, totalBorrows);
 
@@ -447,6 +450,8 @@ contract StrategyEngineTest is Test {
         // 验证存款
         (, uint256 totalUsdc, , ) = engine.getUserTotals(user);
         assertEq(totalUsdc, 1000e6, "Incorrect USDC deposit amount");
+
+        deal(address(usdc), address(engine), 1000e6);
 
         engine.withdraw(StrategyEngine.TokenType.USDC, user, totalUsdc);
 
@@ -504,6 +509,8 @@ contract StrategyEngineTest is Test {
             "Initial health factor should be less than threshold"
         );
 
+        deal(address(usdc), address(engine), 1000e6);
+
         uint256 engineBalance = IERC20(usdc).balanceOf(address(engine));
 
         vm.expectRevert(
@@ -542,6 +549,8 @@ contract StrategyEngineTest is Test {
             HEALTH_FACTOR_THRESHOLD,
             "Initial health factor should be less than threshold"
         );
+
+        deal(address(usdc), address(engine), withdrawAmount);
 
         // 尝试提款
         engine.withdraw(StrategyEngine.TokenType.WBTC, user, withdrawAmount);

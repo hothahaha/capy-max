@@ -36,7 +36,7 @@ contract VerifyDeploymentTest is Test {
             .run();
         vaultProxy = address(vault);
         engineProxy = address(engine);
-        (, , deployerKey) = helperConfig.activeNetworkConfig();
+        (, , , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
         verifier = new VerifyDeployment();
 
         // 设置测试账户

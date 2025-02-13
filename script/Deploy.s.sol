@@ -8,9 +8,21 @@ import {CpToken} from "../src/tokens/CpToken.sol";
 import {Vault} from "../src/vault/Vault.sol";
 import {SignerManager} from "../src/access/SignerManager.sol";
 import {MultiSig} from "../src/access/MultiSig.sol";
+import {IStrategyEngine} from "../src/interfaces/IStrategyEngine.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract DeployScript is Script {
+    struct DeployConfig {
+        address wbtcAddress;
+        address usdcAddress;
+        address aavePool;
+        address aaveOracle;
+        address aaveProtocolDataProvider;
+        uint256 deployerKey;
+        address tokenMessenger;
+        bytes32 solanaAddress;
+    }
+
     function run()
         public
         returns (
@@ -23,14 +35,10 @@ contract DeployScript is Script {
         )
     {
         helperConfig = new HelperConfig();
-        (
-            address wbtcAddress,
-            address usdcAddress,
-            uint256 deployerKey
-        ) = helperConfig.activeNetworkConfig();
+        DeployConfig memory config = _loadConfig(helperConfig);
+        address initialSigner = vm.addr(config.deployerKey);
 
-        vm.startBroadcast(deployerKey);
-        address initialSigner = vm.addr(deployerKey);
+        vm.startBroadcast(config.deployerKey);
 
         // 部署合约
         signerManager = deploySignerManager(initialSigner);
@@ -38,28 +46,58 @@ contract DeployScript is Script {
         signerManager.setMultiSig(address(multiSig));
 
         cpToken = deployCpToken(initialSigner);
-        vault = deployVault(usdcAddress, address(multiSig));
+        vault = deployVault(config.usdcAddress, address(multiSig));
         engine = deployStrategyEngine(
-            wbtcAddress,
-            usdcAddress,
+            config,
             address(cpToken),
             address(vault),
             address(signerManager)
         );
 
-        // 设置所有权
+        _setupUpgradeRights(engine, cpToken, vault, signerManager, multiSig);
+        _transferOwnerships(engine, cpToken, vault, signerManager);
+
+        vm.stopBroadcast();
+    }
+
+    function _loadConfig(
+        HelperConfig helperConfig
+    ) internal view returns (DeployConfig memory config) {
+        (
+            config.wbtcAddress,
+            config.usdcAddress,
+            config.aavePool,
+            config.aaveOracle,
+            config.aaveProtocolDataProvider,
+            config.deployerKey,
+            config.tokenMessenger,
+            config.solanaAddress
+        ) = helperConfig.activeNetworkConfig();
+    }
+
+    function _setupUpgradeRights(
+        StrategyEngine engine,
+        CpToken cpToken,
+        Vault vault,
+        SignerManager signerManager,
+        MultiSig multiSig
+    ) internal {
         multiSig.transferUpgradeRights(address(multiSig));
         signerManager.transferUpgradeRights(address(multiSig));
         vault.transferUpgradeRights(address(multiSig));
         cpToken.transferUpgradeRights(address(multiSig));
         engine.transferUpgradeRights(address(multiSig));
+    }
 
-        // 将 SignerManager 的所有权转移给 engine
+    function _transferOwnerships(
+        StrategyEngine engine,
+        CpToken cpToken,
+        Vault vault,
+        SignerManager signerManager
+    ) internal {
         cpToken.transferOwnership(address(engine));
         vault.transferOwnership(address(engine));
         signerManager.transferOwnership(address(engine));
-
-        vm.stopBroadcast();
     }
 
     function deploySignerManager(
@@ -113,23 +151,29 @@ contract DeployScript is Script {
     }
 
     function deployStrategyEngine(
-        address wbtc,
-        address usdc,
+        DeployConfig memory config,
         address cpToken,
         address vault,
         address signerManager
     ) internal returns (StrategyEngine) {
-        // Deploy StrategyEngine implementation and proxy
         StrategyEngine engineImpl = new StrategyEngine();
         ERC1967Proxy engineProxy = new ERC1967Proxy(address(engineImpl), "");
 
-        StrategyEngine(address(engineProxy)).initialize(
-            wbtc,
-            usdc,
-            cpToken,
-            vault,
-            signerManager
-        );
+        StrategyEngine.EngineInitParams memory params = IStrategyEngine
+            .EngineInitParams({
+                wbtc: config.wbtcAddress,
+                usdc: config.usdcAddress,
+                aavePool: config.aavePool,
+                aaveOracle: config.aaveOracle,
+                aaveProtocolDataProvider: config.aaveProtocolDataProvider,
+                cpToken: cpToken,
+                vault: vault,
+                signerManager: signerManager,
+                tokenMessenger: config.tokenMessenger,
+                solanaAddress: config.solanaAddress
+            });
+
+        StrategyEngine(address(engineProxy)).initialize(params);
 
         return StrategyEngine(address(engineProxy));
     }

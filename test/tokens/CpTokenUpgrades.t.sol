@@ -36,7 +36,7 @@ contract CpTokenUpgradesTest is Test {
     function setUp() public {
         DeployScript deployer = new DeployScript();
         (, cpToken, , signerManager, multiSig, helperConfig) = deployer.run();
-        (, , deployerKey) = helperConfig.activeNetworkConfig();
+        (, , , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
     }
 
     function test_UpgradeToV2() public {
@@ -209,4 +209,4 @@ contract CpTokenUpgradesTest is Test {
             signatures
         );
     }
-} 
+}

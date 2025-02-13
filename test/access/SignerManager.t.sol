@@ -29,7 +29,7 @@ contract SignerManagerTest is Test {
 
         DeployScript deployer = new DeployScript();
         (, , , signerManager, multiSig, helperConfig) = deployer.run();
-        (, , deployerKey) = helperConfig.activeNetworkConfig();
+        (, , , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
     }
 
     function test_Initialize() public view {

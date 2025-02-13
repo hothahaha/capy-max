@@ -9,6 +9,7 @@ import {DeployScript} from "../script/Deploy.s.sol";
 import {Vault} from "../src/vault/Vault.sol";
 import {SignerManager} from "../src/access/SignerManager.sol";
 import {MultiSig} from "../src/access/MultiSig.sol";
+import {IStrategyEngine} from "../src/interfaces/IStrategyEngine.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {UUPSUpgradeableBase} from "../src/upgradeable/UUPSUpgradeableBase.sol";
@@ -49,6 +50,11 @@ contract StrategyEngineUpgradesTest is Test {
     uint256 public deployerKey;
     address public wbtc;
     address public usdc;
+    address public aavePool;
+    address public aaveOracle;
+    address public aaveProtocolDataProvider;
+    address public tokenMessenger;
+    bytes32 public solanaAddress;
     address public owner;
     address public user = makeAddr("user");
     address public signer1;
@@ -79,7 +85,16 @@ contract StrategyEngineUpgradesTest is Test {
             multiSig,
             helperConfig
         ) = deployer.run();
-        (wbtc, usdc, deployerKey) = helperConfig.activeNetworkConfig();
+        (
+            wbtc,
+            usdc,
+            aavePool,
+            aaveOracle,
+            aaveProtocolDataProvider,
+            deployerKey,
+            tokenMessenger,
+            solanaAddress
+        ) = helperConfig.activeNetworkConfig();
 
         // 获取实现合约地址
         address implAddress = address(
@@ -207,11 +222,18 @@ contract StrategyEngineUpgradesTest is Test {
         // 尝试直接初始化实现合约
         vm.expectRevert(InvalidInitialization.selector);
         implementation.initialize(
-            address(0),
-            address(0),
-            address(0),
-            address(0),
-            address(0)
+            IStrategyEngine.EngineInitParams({
+                wbtc: address(0),
+                usdc: address(0),
+                aavePool: address(0),
+                aaveOracle: address(0),
+                aaveProtocolDataProvider: address(0),
+                cpToken: address(0),
+                vault: address(0),
+                signerManager: address(0),
+                tokenMessenger: address(0),
+                solanaAddress: bytes32(0)
+            })
         );
     }
 
@@ -551,11 +573,18 @@ contract StrategyEngineUpgradesTest is Test {
         vm.startBroadcast(vm.addr(deployerKey));
         vm.expectRevert(InvalidInitialization.selector);
         engine.initialize(
-            address(wbtc),
-            address(usdc),
-            address(cpToken),
-            address(vault),
-            address(signerManager)
+            IStrategyEngine.EngineInitParams({
+                wbtc: wbtc,
+                usdc: usdc,
+                aavePool: aavePool,
+                aaveOracle: aaveOracle,
+                aaveProtocolDataProvider: aaveProtocolDataProvider,
+                cpToken: address(cpToken),
+                vault: address(vault),
+                signerManager: address(signerManager),
+                tokenMessenger: address(tokenMessenger),
+                solanaAddress: solanaAddress
+            })
         );
         vm.stopBroadcast();
     }

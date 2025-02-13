@@ -51,7 +51,7 @@ contract MultiSigTest is Test {
 
         DeployScript deployer = new DeployScript();
         (, , , signerManager, multiSig, helperConfig) = deployer.run();
-        (, , signer1Key) = helperConfig.activeNetworkConfig();
+        (, , , , , signer1Key, , ) = helperConfig.activeNetworkConfig();
         signer1 = vm.addr(signer1Key);
 
         target = new MockTarget();

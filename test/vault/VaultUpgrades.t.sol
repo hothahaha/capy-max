@@ -48,7 +48,8 @@ contract VaultUpgradesTest is Test {
         (engine, , vault, signerManager, multiSig, helperConfig) = deployer
             .run();
         address usdcAddress;
-        (, usdcAddress, deployerKey) = helperConfig.activeNetworkConfig();
+        (, usdcAddress, , , , deployerKey, , ) = helperConfig
+            .activeNetworkConfig();
         usdc = IERC20(usdcAddress);
         owner = address(engine);
 

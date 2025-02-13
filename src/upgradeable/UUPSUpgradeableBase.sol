@@ -28,7 +28,7 @@ abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
     }
 
     /// @notice 转移升级权限
-    function transferUpgradeRights(address newOwner) external onlyOwner {
+    function transferUpgradeRights(address newOwner) public onlyOwner {
         if (newOwner == address(0)) {
             revert UUPSUpgradeableBase__InvalidUpgradeRightsOwner();
         }
