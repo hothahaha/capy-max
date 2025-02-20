@@ -12,6 +12,6 @@ remappings = [
 ffi = true
 
 via_ir = true
-optimizer_runs = 10
+optimizer_runs = 100
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
