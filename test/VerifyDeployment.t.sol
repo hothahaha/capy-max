@@ -30,32 +30,29 @@ contract VerifyDeploymentTest is Test {
     address public engineProxy;
 
     function setUp() public {
-        // 部署基础设施
+        // Deploy infrastructure
         DeployScript deployer = new DeployScript();
-        (engine, , vault, signerManager, multiSig, helperConfig) = deployer
-            .run();
+        (engine, , vault, signerManager, multiSig, helperConfig) = deployer.run();
         vaultProxy = address(vault);
         engineProxy = address(engine);
         (, , , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
         verifier = new VerifyDeployment();
 
-        // 设置测试账户
+        // Set test accounts
         (signer1, signer1Key) = makeAddrAndKey("signer1");
         (signer2, signer2Key) = makeAddrAndKey("signer2");
 
-        // 添加签名者
+        // Add signers
         _addSigner(signer1);
         _addSigner(signer2);
-        _updateThreshold(2); // 设置需要2个签名
+        _updateThreshold(2); // Set threshold to 2
     }
 
     function test_VerifyAndDeploy() public {
         uint256 deadline = block.timestamp + 1 days;
-        bytes memory deployData = abi.encodeWithSelector(
-            DeployScript.run.selector
-        );
+        bytes memory deployData = abi.encodeWithSelector(DeployScript.run.selector);
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(verifier),
             deployData,
@@ -63,12 +60,12 @@ contract VerifyDeploymentTest is Test {
             deadline
         );
 
-        // 获取签名
+        // Get signatures
         bytes[] memory signatures = new bytes[](2);
         signatures[0] = _signTransaction(signer1Key, txHash);
         signatures[1] = _signTransaction(signer2Key, txHash);
 
-        // 执行验证和部署
+        // Execute verification and deployment
         verifier.verifyAndDeploy(address(multiSig), signatures, deadline);
     }
 
@@ -84,17 +81,13 @@ contract VerifyDeploymentTest is Test {
         uint256 deadline = block.timestamp + 1 days;
         bytes[] memory signatures = new bytes[](1);
 
-        vm.expectRevert(
-            VerifyDeployment.VerifyDeployment__InsufficientSignatures.selector
-        );
+        vm.expectRevert(VerifyDeployment.VerifyDeployment__InsufficientSignatures.selector);
         verifier.verifyAndDeploy(address(multiSig), signatures, deadline);
     }
 
     function test_RevertWhen_InvalidSignature() public {
         uint256 deadline = block.timestamp + 1 days;
-        bytes memory deployData = abi.encodeWithSelector(
-            DeployScript.run.selector
-        );
+        bytes memory deployData = abi.encodeWithSelector(DeployScript.run.selector);
 
         bytes32 txHash = multiSig.hashTransaction(
             address(verifier),
@@ -109,14 +102,12 @@ contract VerifyDeploymentTest is Test {
         signatures[0] = _signTransaction(signer1Key, txHash);
         signatures[1] = _signTransaction(invalidKey, txHash);
 
-        vm.expectRevert(
-            VerifyDeployment.VerifyDeployment__InvalidSignature.selector
-        );
+        vm.expectRevert(VerifyDeployment.VerifyDeployment__InvalidSignature.selector);
         verifier.verifyAndDeploy(address(multiSig), signatures, deadline);
     }
 
     function test_VerifyAndUpgrade() public {
-        // 部署新的实现合约
+        // Deploy new implementation contract
         Vault newImplementation = new Vault();
 
         uint256 deadline = block.timestamp + 1 days;
@@ -126,7 +117,7 @@ contract VerifyDeploymentTest is Test {
             ""
         );
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             vaultProxy,
             upgradeData,
@@ -134,12 +125,12 @@ contract VerifyDeploymentTest is Test {
             deadline
         );
 
-        // 获取签名
+        // Get signatures
         bytes[] memory signatures = new bytes[](2);
         signatures[0] = _signTransaction(signer1Key, txHash);
         signatures[1] = _signTransaction(signer2Key, txHash);
 
-        // 执行验证和升级
+        // Execute verification and upgrade
         verifier.verifyAndUpgrade(
             address(multiSig),
             vaultProxy,
@@ -148,11 +139,8 @@ contract VerifyDeploymentTest is Test {
             deadline
         );
 
-        // 验证升级是否成功
-        assertEq(
-            Vault(vaultProxy).implementation(),
-            address(newImplementation)
-        );
+        // Verify upgrade success
+        assertEq(Vault(vaultProxy).implementation(), address(newImplementation));
     }
 
     function test_RevertWhen_UpgradeWithInvalidSignatures() public {
@@ -171,15 +159,13 @@ contract VerifyDeploymentTest is Test {
             deadline
         );
 
-        // 使用未授权的签名者
+        // Use unauthorized signer
         (, uint256 invalidKey) = makeAddrAndKey("invalidSigner");
         bytes[] memory signatures = new bytes[](2);
         signatures[0] = _signTransaction(signer1Key, txHash);
         signatures[1] = _signTransaction(invalidKey, txHash);
 
-        vm.expectRevert(
-            VerifyDeployment.VerifyDeployment__InvalidSignature.selector
-        );
+        vm.expectRevert(VerifyDeployment.VerifyDeployment__InvalidSignature.selector);
         verifier.verifyAndUpgrade(
             address(multiSig),
             vaultProxy,
@@ -190,7 +176,7 @@ contract VerifyDeploymentTest is Test {
     }
 
     function test_VerifyAndUpgradeEngine() public {
-        // 部署新的实现合约
+        // Deploy new implementation contract
         StrategyEngine newImplementation = new StrategyEngine();
 
         uint256 deadline = block.timestamp + 1 days;
@@ -219,10 +205,7 @@ contract VerifyDeploymentTest is Test {
             deadline
         );
 
-        assertEq(
-            StrategyEngine(engineProxy).implementation(),
-            address(newImplementation)
-        );
+        assertEq(StrategyEngine(engineProxy).implementation(), address(newImplementation));
     }
 
     function test_RevertWhen_UpgradeToZeroAddress() public {
@@ -244,16 +227,8 @@ contract VerifyDeploymentTest is Test {
         signatures[0] = _signTransaction(signer1Key, txHash);
         signatures[1] = _signTransaction(signer2Key, txHash);
 
-        vm.expectRevert(
-            VerifyDeployment.VerifyDeployment__UpgradeFailed.selector
-        );
-        verifier.verifyAndUpgrade(
-            address(multiSig),
-            vaultProxy,
-            address(0),
-            signatures,
-            deadline
-        );
+        vm.expectRevert(VerifyDeployment.VerifyDeployment__UpgradeFailed.selector);
+        verifier.verifyAndUpgrade(address(multiSig), vaultProxy, address(0), signatures, deadline);
     }
 
     function test_RevertWhen_UpgradeWithExpiredDeadline() public {
@@ -277,9 +252,7 @@ contract VerifyDeploymentTest is Test {
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(signer1Key, keccak256("dummy hash"));
 
-        vm.expectRevert(
-            VerifyDeployment.VerifyDeployment__InsufficientSignatures.selector
-        );
+        vm.expectRevert(VerifyDeployment.VerifyDeployment__InsufficientSignatures.selector);
         verifier.verifyAndUpgrade(
             address(multiSig),
             vaultProxy,
@@ -309,9 +282,7 @@ contract VerifyDeploymentTest is Test {
         signatures[0] = _signTransaction(signer1Key, txHash);
         signatures[1] = _signTransaction(signer1Key, txHash); // 重复签名
 
-        vm.expectRevert(
-            VerifyDeployment.VerifyDeployment__DuplicateSigner.selector
-        );
+        vm.expectRevert(VerifyDeployment.VerifyDeployment__DuplicateSigner.selector);
         verifier.verifyAndUpgrade(
             address(multiSig),
             vaultProxy,
@@ -323,10 +294,7 @@ contract VerifyDeploymentTest is Test {
 
     // Helper functions
     function _addSigner(address signer) internal {
-        bytes memory data = abi.encodeWithSelector(
-            SignerManager.addSigner.selector,
-            signer
-        );
+        bytes memory data = abi.encodeWithSelector(SignerManager.addSigner.selector, signer);
         uint256 deadline = block.timestamp + 1 days;
 
         bytes32 txHash = multiSig.hashTransaction(
@@ -340,12 +308,7 @@ contract VerifyDeploymentTest is Test {
         signatures[0] = _signTransaction(deployerKey, txHash);
 
         vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(
-            address(signerManager),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
     }
 
     function _updateThreshold(uint256 newThreshold) internal {
@@ -366,12 +329,7 @@ contract VerifyDeploymentTest is Test {
         signatures[0] = _signTransaction(deployerKey, txHash);
 
         vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(
-            address(signerManager),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
     }
 
     function _signTransaction(

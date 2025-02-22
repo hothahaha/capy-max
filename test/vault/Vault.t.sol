@@ -36,11 +36,9 @@ contract VaultTest is Test {
         (signer1, signer1Key) = makeAddrAndKey("signer1");
 
         DeployScript deployer = new DeployScript();
-        (engine, , vault, signerManager, multiSig, helperConfig) = deployer
-            .run();
+        (engine, , vault, signerManager, multiSig, helperConfig) = deployer.run();
         address usdcAddress;
-        (, usdcAddress, , , , deployerKey, , ) = helperConfig
-            .activeNetworkConfig();
+        (, usdcAddress, , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
         usdc = IERC20(usdcAddress);
         owner = address(engine);
 
@@ -80,21 +78,11 @@ contract VaultTest is Test {
         vault.depositProfit(amount);
         vm.stopPrank();
 
-        // 准备多签交易数据
-        bytes memory data = abi.encodeWithSelector(
-            Vault.withdrawProfit.selector,
-            user,
-            amount
-        );
+        // Prepare multi-signature transaction data
+        bytes memory data = abi.encodeWithSelector(Vault.withdrawProfit.selector, user, amount);
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = _hashTransaction(
-            address(multiSig),
-            address(vault),
-            data,
-            0,
-            deadline
-        );
+        bytes32 txHash = _hashTransaction(address(multiSig), address(vault), data, 0, deadline);
 
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(deployerKey, txHash);
@@ -130,13 +118,7 @@ contract VaultTest is Test {
         );
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = _hashTransaction(
-            address(multiSig),
-            address(vault),
-            data,
-            0,
-            deadline
-        );
+        bytes32 txHash = _hashTransaction(address(multiSig), address(vault), data, 0, deadline);
 
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(deployerKey, txHash);
@@ -166,12 +148,7 @@ contract VaultTest is Test {
         uint256 nonce,
         uint256 deadline
     ) internal view returns (bytes32) {
-        bytes32 txHash = MultiSig(verifyingContract).hashTransaction(
-            to,
-            data,
-            nonce,
-            deadline
-        );
+        bytes32 txHash = MultiSig(verifyingContract).hashTransaction(to, data, nonce, deadline);
         return txHash;
     }
 

@@ -41,26 +41,26 @@ contract SignerManagerUpgradesTest is Test {
 
         uint256 deadline = block.timestamp + 1 days;
 
-        // 构造升级数据
+        // Construct upgrade data
         bytes memory upgradeData = abi.encodeWithSelector(
             signerManager.upgradeToAndCall.selector,
             address(signerManagerV2),
             ""
         );
 
-        // 生成签名
+        // Generate signatures
         bytes[] memory signatures = new bytes[](2);
         (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
 
         _addSigner(signer2);
         _updateThreshold(2);
 
-        // 确保使用正确的签名顺序
+        // Ensure correct signature order
         address deployer = vm.addr(deployerKey);
         require(signerManager.isSigner(deployer), "Deployer not a signer");
         require(signerManager.isSigner(signer2), "Signer2 not a signer");
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(signerManager),
             upgradeData,
@@ -74,16 +74,9 @@ contract SignerManagerUpgradesTest is Test {
         vm.expectEmit(true, true, true, true);
         emit Upgraded(address(signerManagerV2));
 
-        multiSig.executeTransaction(
-            address(signerManager),
-            upgradeData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), upgradeData, deadline, signatures);
 
-        SignerManagerV2 upgradedSignerManager = SignerManagerV2(
-            address(signerManager)
-        );
+        SignerManagerV2 upgradedSignerManager = SignerManagerV2(address(signerManager));
         assertEq(upgradedSignerManager.version(), "V2");
     }
 
@@ -92,24 +85,24 @@ contract SignerManagerUpgradesTest is Test {
 
         uint256 deadline = block.timestamp + 1 days;
 
-        // 构造升级数据
+        // Construct upgrade data
         bytes memory upgradeData = abi.encodeWithSelector(
             signerManager.upgradeToAndCall.selector,
             address(signerManagerV2),
             ""
         );
 
-        // 生成签名
+        // Generate signatures
         bytes[] memory signatures = new bytes[](2);
         (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
 
         _addSigner(signer2);
         _updateThreshold(2);
 
-        // 使用未授权的签名者生成签名
+        // Generate signatures using unauthorized signer
         (, uint256 unauthorizedKey) = makeAddrAndKey("unauthorized");
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(signerManager),
             upgradeData,
@@ -121,12 +114,7 @@ contract SignerManagerUpgradesTest is Test {
         signatures[1] = _signTransaction(signer2Key, txHash);
 
         vm.expectRevert(MultiSig.MultiSig__InvalidSignature.selector);
-        multiSig.executeTransaction(
-            address(signerManager),
-            upgradeData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), upgradeData, deadline, signatures);
     }
 
     // Helper functions
@@ -139,10 +127,7 @@ contract SignerManagerUpgradesTest is Test {
     }
 
     function _addSigner(address signer) internal {
-        bytes memory data = abi.encodeWithSelector(
-            SignerManager.addSigner.selector,
-            signer
-        );
+        bytes memory data = abi.encodeWithSelector(SignerManager.addSigner.selector, signer);
         uint256 deadline = block.timestamp + 1 days;
 
         bytes32 txHash = multiSig.hashTransaction(
@@ -156,12 +141,7 @@ contract SignerManagerUpgradesTest is Test {
         signatures[0] = _signTransaction(deployerKey, txHash);
 
         vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(
-            address(signerManager),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
     }
 
     function _updateThreshold(uint256 newThreshold) internal {
@@ -182,11 +162,6 @@ contract SignerManagerUpgradesTest is Test {
         signatures[0] = _signTransaction(deployerKey, txHash);
 
         vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(
-            address(signerManager),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
     }
 }

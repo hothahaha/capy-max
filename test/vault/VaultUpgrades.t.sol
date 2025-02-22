@@ -62,26 +62,26 @@ contract VaultUpgradesTest is Test {
 
         uint256 deadline = block.timestamp + 1 days;
 
-        // 构造升级数据
+        // Construct upgrade data
         bytes memory upgradeData = abi.encodeWithSelector(
             vault.upgradeToAndCall.selector,
             address(vaultV2),
             ""
         );
 
-        // 生成签名
+        // Generate signatures
         bytes[] memory signatures = new bytes[](2);
         (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
 
         _addSigner(signer2);
         _updateThreshold(2);
 
-        // 确保使用正确的签名顺序
+        // Ensure correct signature order
         address deployer = vm.addr(deployerKey);
         require(signerManager.isSigner(deployer), "Deployer not a signer");
         require(signerManager.isSigner(signer2), "Signer2 not a signer");
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(vault),
             upgradeData,
@@ -111,24 +111,24 @@ contract VaultUpgradesTest is Test {
 
         uint256 deadline = block.timestamp + 1 days;
 
-        // 构造升级数据
+        // Construct upgrade data
         bytes memory upgradeData = abi.encodeWithSelector(
             vault.upgradeToAndCall.selector,
             address(vaultV2),
             ""
         );
 
-        // 生成签名
+        // Generate signatures
         bytes[] memory signatures = new bytes[](2);
         (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
 
         _addSigner(signer2);
         _updateThreshold(2);
 
-        // 使用未授权的签名者生成签名
+        // Use unauthorized signer to generate signatures
         (, uint256 unauthorizedKey) = makeAddrAndKey("unauthorized");
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(vault),
             upgradeData,

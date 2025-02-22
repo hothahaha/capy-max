@@ -29,18 +29,10 @@ contract MultiSigTest is Test {
     uint256 public signer1Key;
     uint256 public signer2Key;
 
-    event TransactionExecuted(
-        address indexed to,
-        bytes data,
-        uint256 nonce,
-        uint256 deadline
-    );
+    event TransactionExecuted(address indexed to, bytes data, uint256 nonce, uint256 deadline);
 
     event Upgraded(address indexed implementation);
-    event OwnershipTransferred(
-        address indexed previousOwner,
-        address indexed newOwner
-    );
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     error InvalidInitialization();
     error OwnableUnauthorizedAccount(address account);
@@ -83,29 +75,16 @@ contract MultiSigTest is Test {
     function test_RevertWhen_TransferOwnershipUnauthorized() public {
         address newOwner = makeAddr("newOwner");
         vm.prank(address(1));
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                OwnableUnauthorizedAccount.selector,
-                address(1)
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, address(1)));
         multiSig.transferOwnership(newOwner);
     }
 
     function test_ExecuteTransaction() public {
         uint256 newValue = 42;
-        bytes memory data = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            newValue
-        );
+        bytes memory data = abi.encodeWithSelector(MockTarget.setValue.selector, newValue);
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = multiSig.hashTransaction(
-            address(target),
-            data,
-            0,
-            deadline
-        );
+        bytes32 txHash = multiSig.hashTransaction(address(target), data, 0, deadline);
 
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(signer1Key, txHash);
@@ -114,12 +93,7 @@ contract MultiSigTest is Test {
         emit TransactionExecuted(address(target), data, 0, deadline);
 
         vm.prank(signer1);
-        multiSig.executeTransaction(
-            address(target),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), data, deadline, signatures);
 
         assertTrue(target.called());
         assertEq(target.value(), newValue);
@@ -127,57 +101,31 @@ contract MultiSigTest is Test {
     }
 
     function test_RevertWhen_ExecuteExpiredTransaction() public {
-        bytes memory data = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            1
-        );
+        bytes memory data = abi.encodeWithSelector(MockTarget.setValue.selector, 1);
         uint256 deadline = block.timestamp - 1;
 
-        bytes32 txHash = multiSig.hashTransaction(
-            address(target),
-            data,
-            0,
-            deadline
-        );
+        bytes32 txHash = multiSig.hashTransaction(address(target), data, 0, deadline);
 
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(signer1Key, txHash);
 
         vm.prank(signer1);
         vm.expectRevert(MultiSig.MultiSig__InvalidDeadline.selector);
-        multiSig.executeTransaction(
-            address(target),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), data, deadline, signatures);
     }
 
     function test_RevertWhen_ExecuteWithInvalidSignature() public {
-        bytes memory data = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            1
-        );
+        bytes memory data = abi.encodeWithSelector(MockTarget.setValue.selector, 1);
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = multiSig.hashTransaction(
-            address(target),
-            data,
-            0,
-            deadline
-        );
+        bytes32 txHash = multiSig.hashTransaction(address(target), data, 0, deadline);
 
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(signer2Key, txHash); // Using non-signer key
 
         vm.prank(signer1);
         vm.expectRevert(MultiSig.MultiSig__InvalidSignature.selector);
-        multiSig.executeTransaction(
-            address(target),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), data, deadline, signatures);
     }
 
     function test_RevertWhen_ExecuteWithDuplicateSignatures() public {
@@ -200,12 +148,7 @@ contract MultiSigTest is Test {
         signatures[0] = _signTransaction(signer1Key, addSignerTxHash);
 
         vm.prank(signer1);
-        multiSig.executeTransaction(
-            address(signerManager),
-            addSignerData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), addSignerData, deadline, signatures);
 
         // Update threshold to 2
         bytes memory updateThresholdData = abi.encodeWithSelector(
@@ -233,10 +176,7 @@ contract MultiSigTest is Test {
         );
 
         // Try to execute with duplicate signatures
-        bytes memory targetData = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            42
-        );
+        bytes memory targetData = abi.encodeWithSelector(MockTarget.setValue.selector, 42);
 
         bytes32 targetTxHash = multiSig.hashTransaction(
             address(target),
@@ -251,19 +191,11 @@ contract MultiSigTest is Test {
 
         vm.prank(signer1);
         vm.expectRevert(MultiSig.MultiSig__DuplicateSignature.selector);
-        multiSig.executeTransaction(
-            address(target),
-            targetData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), targetData, deadline, signatures);
     }
 
     function test_RevertWhen_ExecuteWithInvalidSignatureLength() public {
-        bytes memory data = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            42
-        );
+        bytes memory data = abi.encodeWithSelector(MockTarget.setValue.selector, 42);
         uint256 deadline = block.timestamp + 1 days;
 
         bytes[] memory signatures = new bytes[](1);
@@ -271,12 +203,7 @@ contract MultiSigTest is Test {
 
         vm.prank(signer1);
         vm.expectRevert(MultiSig.MultiSig__InvalidSignatureLength.selector);
-        multiSig.executeTransaction(
-            address(target),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), data, deadline, signatures);
     }
 
     function test_RevertWhen_ExecuteWithInsufficientSignatures() public {
@@ -299,12 +226,7 @@ contract MultiSigTest is Test {
         signatures[0] = _signTransaction(signer1Key, addSignerTxHash);
 
         vm.prank(signer1);
-        multiSig.executeTransaction(
-            address(signerManager),
-            addSignerData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), addSignerData, deadline, signatures);
 
         // Update threshold to 2
         bytes memory updateThresholdData = abi.encodeWithSelector(
@@ -332,10 +254,7 @@ contract MultiSigTest is Test {
         );
 
         // Try to execute with insufficient signatures
-        bytes memory targetData = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            42
-        );
+        bytes memory targetData = abi.encodeWithSelector(MockTarget.setValue.selector, 42);
 
         bytes32 targetTxHash = multiSig.hashTransaction(
             address(target),
@@ -349,46 +268,25 @@ contract MultiSigTest is Test {
 
         vm.prank(signer1);
         vm.expectRevert(MultiSig.MultiSig__InsufficientSignatures.selector);
-        multiSig.executeTransaction(
-            address(target),
-            targetData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), targetData, deadline, signatures);
     }
 
     function test_RevertWhen_ExecuteWithZeroSignatures() public {
-        bytes memory data = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            42
-        );
+        bytes memory data = abi.encodeWithSelector(MockTarget.setValue.selector, 42);
         uint256 deadline = block.timestamp + 1 days;
 
         bytes[] memory signatures = new bytes[](0);
 
         vm.prank(signer1);
         vm.expectRevert(MultiSig.MultiSig__InsufficientSignatures.selector);
-        multiSig.executeTransaction(
-            address(target),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), data, deadline, signatures);
     }
 
     function test_RevertWhen_ExecuteWithZeroAddress() public {
-        bytes memory data = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            42
-        );
+        bytes memory data = abi.encodeWithSelector(MockTarget.setValue.selector, 42);
         uint256 deadline = block.timestamp + 1 days;
 
-        bytes32 txHash = multiSig.hashTransaction(
-            address(0),
-            data,
-            0,
-            deadline
-        );
+        bytes32 txHash = multiSig.hashTransaction(address(0), data, 0, deadline);
 
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(signer1Key, txHash);
@@ -418,12 +316,7 @@ contract MultiSigTest is Test {
         signatures[0] = _signTransaction(signer1Key, addSignerTxHash);
 
         vm.prank(signer1);
-        multiSig.executeTransaction(
-            address(signerManager),
-            addSignerData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), addSignerData, deadline, signatures);
 
         bytes memory updateThresholdData = abi.encodeWithSelector(
             SignerManager.updateThreshold.selector,
@@ -451,10 +344,7 @@ contract MultiSigTest is Test {
         );
 
         // Test transaction with multiple signatures
-        bytes memory targetData = abi.encodeWithSelector(
-            MockTarget.setValue.selector,
-            42
-        );
+        bytes memory targetData = abi.encodeWithSelector(MockTarget.setValue.selector, 42);
 
         currentNonce = multiSig.nonce();
         bytes32 targetTxHash = multiSig.hashTransaction(
@@ -469,12 +359,7 @@ contract MultiSigTest is Test {
         signatures[1] = _signTransaction(signer2Key, targetTxHash);
 
         vm.prank(signer1);
-        multiSig.executeTransaction(
-            address(target),
-            targetData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(target), targetData, deadline, signatures);
 
         assertTrue(target.called());
         assertEq(target.value(), 42);

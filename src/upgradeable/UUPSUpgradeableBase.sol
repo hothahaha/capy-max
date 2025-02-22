@@ -19,15 +19,13 @@ abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
         _disableInitializers();
     }
 
-    function __UUPSUpgradeableBase_init(
-        address initialOwner
-    ) internal onlyInitializing {
+    function __UUPSUpgradeableBase_init(address initialOwner) internal onlyInitializing {
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         _upgradeRightsOwner = initialOwner;
     }
 
-    /// @notice 转移升级权限
+    /// @notice Transfer upgrade rights
     function transferUpgradeRights(address newOwner) public onlyOwner {
         if (newOwner == address(0)) {
             revert UUPSUpgradeableBase__InvalidUpgradeRightsOwner();
@@ -41,25 +39,23 @@ abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
         emit UpgradeRightsTransferred(oldOwner, newOwner);
     }
 
-    /// @notice 获取升级权限所有者
+    /// @notice Get upgrade rights owner
     function upgradeRightsOwner() public view returns (address) {
         return _upgradeRightsOwner;
     }
 
-    function _authorizeUpgrade(
-        address newImplementation
-    ) internal view override {
-        // 检查新实现合约地址是否为零地址
+    function _authorizeUpgrade(address newImplementation) internal view override {
+        // Check if new implementation contract address is zero address
         if (newImplementation == address(0)) {
             revert UUPSUpgradeableBase__InvalidImplementation();
         }
 
-        // 检查新实现地址是否与当前实现地址相同
+        // Check if new implementation address is the same as current implementation address
         if (newImplementation == ERC1967Utils.getImplementation()) {
             revert UUPSUpgradeableBase__InvalidImplementation();
         }
 
-        // 确保调用者是升级权限所有者
+        // Ensure caller is upgrade rights owner
         if (msg.sender != _upgradeRightsOwner) {
             revert UUPSUpgradeableBase__Unauthorized();
         }

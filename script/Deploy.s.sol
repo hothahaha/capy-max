@@ -40,7 +40,7 @@ contract DeployScript is Script {
 
         vm.startBroadcast(config.deployerKey);
 
-        // 部署合约
+        // Deploy contracts
         signerManager = deploySignerManager(initialSigner);
         multiSig = deployMultiSig(initialSigner, address(signerManager));
         signerManager.setMultiSig(address(multiSig));

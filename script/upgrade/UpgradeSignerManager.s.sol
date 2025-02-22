@@ -13,23 +13,22 @@ contract UpgradeSignerManager is Script {
         address proxyAddress = vm.envAddress("SIGNER_MANAGER_PROXY");
         address multiSig = vm.envAddress("MULTISIG_ADDRESS");
         uint256[] memory privateKeys = vm.envUint("PRIVATE_KEYS", ",");
-        
+
         // 2. 部署新的实现合约
         vm.startBroadcast();
         SignerManager newImplementation = new SignerManager();
         console.log("New SignerManager implementation deployed at:", address(newImplementation));
-        
+
         // 3. 设置截止时间
         uint256 deadline = block.timestamp + 1 days;
-        
-        // 4. 构造升级数据
+
+        // 4. Construct upgrade data
         bytes memory upgradeData = abi.encodeWithSelector(
             ITransparentUpgradeableProxy.upgradeToAndCall.selector,
             address(newImplementation),
             ""
         );
 
-        // 5. 获取交易哈希
         bytes32 txHash = MultiSig(multiSig).hashTransaction(
             proxyAddress,
             upgradeData,
@@ -37,21 +36,16 @@ contract UpgradeSignerManager is Script {
             deadline
         );
 
-        // 6. 收集签名
+        // 5. Generate signatures
         bytes[] memory signatures = new bytes[](privateKeys.length);
-        for(uint i = 0; i < privateKeys.length; i++) {
+        for (uint i = 0; i < privateKeys.length; i++) {
             (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKeys[i], txHash);
             signatures[i] = abi.encodePacked(r, s, v);
         }
 
-        // 7. 执行升级
-        MultiSig(multiSig).executeTransaction(
-            proxyAddress,
-            upgradeData,
-            deadline,
-            signatures
-        );
-        
+        // 6. 执行升级
+        MultiSig(multiSig).executeTransaction(proxyAddress, upgradeData, deadline, signatures);
+
         vm.stopBroadcast();
 
         // 8. 验证升级结果

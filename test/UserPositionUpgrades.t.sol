@@ -45,11 +45,7 @@ contract UserPositionUpgradesTest is Test {
         address user = makeAddr("user");
 
         // Deploy UserPosition
-        userPosition = deployUserPosition(
-            address(engine),
-            address(engine),
-            user
-        );
+        userPosition = deployUserPosition(address(engine), address(engine), user);
     }
 
     function test_UpgradeToV2() public {
@@ -57,26 +53,26 @@ contract UserPositionUpgradesTest is Test {
 
         uint256 deadline = block.timestamp + 1 days;
 
-        // 构造升级数据
+        // Construct upgrade data
         bytes memory upgradeData = abi.encodeWithSelector(
             userPosition.upgradeToAndCall.selector,
             address(userPositionV2),
             ""
         );
 
-        // 生成签名
+        // Generate signatures
         bytes[] memory signatures = new bytes[](2);
         (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
 
         _addSigner(signer2);
         _updateThreshold(2);
 
-        // 确保使用正确的签名顺序
+        // Ensure correct signature order
         address deployer = vm.addr(deployerKey);
         require(signerManager.isSigner(deployer), "Deployer not a signer");
         require(signerManager.isSigner(signer2), "Signer2 not a signer");
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(userPosition),
             upgradeData,
@@ -90,16 +86,9 @@ contract UserPositionUpgradesTest is Test {
         vm.expectEmit(true, true, true, true);
         emit Upgraded(address(userPositionV2));
 
-        multiSig.executeTransaction(
-            address(userPosition),
-            upgradeData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(userPosition), upgradeData, deadline, signatures);
 
-        UserPositionV2 upgradedUserPosition = UserPositionV2(
-            payable(address(userPosition))
-        );
+        UserPositionV2 upgradedUserPosition = UserPositionV2(payable(address(userPosition)));
         assertEq(upgradedUserPosition.version(), "V2");
     }
 
@@ -108,24 +97,24 @@ contract UserPositionUpgradesTest is Test {
 
         uint256 deadline = block.timestamp + 1 days;
 
-        // 构造升级数据
+        // Construct upgrade data
         bytes memory upgradeData = abi.encodeWithSelector(
             userPosition.upgradeToAndCall.selector,
             address(userPositionV2),
             ""
         );
 
-        // 生成签名
+        // Generate signatures
         bytes[] memory signatures = new bytes[](2);
         (address signer2, uint256 signer2Key) = makeAddrAndKey("signer2");
 
         _addSigner(signer2);
         _updateThreshold(2);
 
-        // 使用未授权的签名者生成签名
+        // Generate signatures with unauthorized signer
         (, uint256 unauthorizedKey) = makeAddrAndKey("unauthorized");
 
-        // 获取交易哈希
+        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(userPosition),
             upgradeData,
@@ -137,30 +126,21 @@ contract UserPositionUpgradesTest is Test {
         signatures[1] = _signTransaction(signer2Key, txHash);
 
         vm.expectRevert(MultiSig.MultiSig__InvalidSignature.selector);
-        multiSig.executeTransaction(
-            address(userPosition),
-            upgradeData,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(userPosition), upgradeData, deadline, signatures);
     }
 
     function test_RevertWhen_UpgradeDirectly() public {
         UserPositionV2 userPositionV2 = new UserPositionV2();
 
-        // 尝试直接调用升级函数
+        // Try to call upgrade function directly
         vm.prank(vm.addr(deployerKey));
-        vm.expectRevert(
-            UUPSUpgradeableBase.UUPSUpgradeableBase__Unauthorized.selector
-        );
+        vm.expectRevert(UUPSUpgradeableBase.UUPSUpgradeableBase__Unauthorized.selector);
         userPosition.upgradeToAndCall(address(userPositionV2), "");
 
-        // 尝试使用合约所有者调用升级函数
+        // Try to call upgrade function using contract owner
         address owner = userPosition.owner();
         vm.prank(owner);
-        vm.expectRevert(
-            UUPSUpgradeableBase.UUPSUpgradeableBase__Unauthorized.selector
-        );
+        vm.expectRevert(UUPSUpgradeableBase.UUPSUpgradeableBase__Unauthorized.selector);
         userPosition.upgradeToAndCall(address(userPositionV2), "");
     }
 
@@ -174,21 +154,17 @@ contract UserPositionUpgradesTest is Test {
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), "");
         UserPosition up = UserPosition(payable(address(proxy)));
 
-        // 先初始化
-        UserPosition(payable(address(proxy))).initialize(
-            initialOwner,
-            engine_,
-            user_
-        );
+        // Initialize
+        UserPosition(payable(address(proxy))).initialize(initialOwner, engine_, user_);
 
-        // 确保我们是合约的所有者
+        // Ensure we are the contract owner
         assertEq(up.owner(), initialOwner);
 
         vm.startPrank(initialOwner);
-        // 然后转移升级权限
+        // Then transfer upgrade rights
         up.transferUpgradeRights(address(multiSig));
 
-        // 最后转移所有权
+        // Finally transfer ownership
         up.transferOwnership(address(engine));
         vm.stopPrank();
         return up;
@@ -203,10 +179,7 @@ contract UserPositionUpgradesTest is Test {
     }
 
     function _addSigner(address signer) internal {
-        bytes memory data = abi.encodeWithSelector(
-            SignerManager.addSigner.selector,
-            signer
-        );
+        bytes memory data = abi.encodeWithSelector(SignerManager.addSigner.selector, signer);
         uint256 deadline = block.timestamp + 1 days;
 
         bytes32 txHash = multiSig.hashTransaction(
@@ -220,12 +193,7 @@ contract UserPositionUpgradesTest is Test {
         signatures[0] = _signTransaction(deployerKey, txHash);
 
         vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(
-            address(signerManager),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
     }
 
     function _updateThreshold(uint256 newThreshold) internal {
@@ -246,11 +214,6 @@ contract UserPositionUpgradesTest is Test {
         signatures[0] = _signTransaction(deployerKey, txHash);
 
         vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(
-            address(signerManager),
-            data,
-            deadline,
-            signatures
-        );
+        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
     }
 }

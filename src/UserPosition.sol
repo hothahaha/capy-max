@@ -10,7 +10,6 @@ import {IAavePool} from "./aave/interface/IAavePool.sol";
 contract UserPosition is UUPSUpgradeableBase {
     using SafeERC20 for IERC20;
 
-    // 将 immutable 变量改为状态变量
     address public strategy;
     address public user;
 
@@ -65,13 +64,7 @@ contract UserPosition is UUPSUpgradeableBase {
         uint256 interestRateMode,
         uint16 referralCode
     ) external onlyStrategy {
-        IAavePool(aavePool).borrow(
-            asset,
-            amount,
-            interestRateMode,
-            referralCode,
-            address(this)
-        );
+        IAavePool(aavePool).borrow(asset, amount, interestRateMode, referralCode, address(this));
         IERC20(asset).approve(strategy, type(uint256).max);
     }
 
@@ -82,13 +75,7 @@ contract UserPosition is UUPSUpgradeableBase {
         uint256 interestRateMode
     ) external onlyStrategy returns (uint256) {
         IERC20(asset).approve(aavePool, amount);
-        return
-            IAavePool(aavePool).repay(
-                asset,
-                amount,
-                interestRateMode,
-                address(this)
-            );
+        return IAavePool(aavePool).repay(asset, amount, interestRateMode, address(this));
     }
 
     receive() external payable {}

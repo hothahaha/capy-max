@@ -42,8 +42,7 @@ contract Vault is Initializable, UUPSUpgradeableBase {
     function withdrawProfit(address to, uint256 amount) external {
         if (amount == 0) revert Vault__InvalidAmount();
         if (msg.sender != address(multiSig)) revert Vault__Unauthorized();
-        if (token.balanceOf(address(this)) < amount)
-            revert Vault__InsufficientBalance();
+        if (token.balanceOf(address(this)) < amount) revert Vault__InsufficientBalance();
 
         token.safeTransfer(to, amount);
         emit Withdraw(address(token), amount);
@@ -53,7 +52,7 @@ contract Vault is Initializable, UUPSUpgradeableBase {
         return token.balanceOf(address(this));
     }
 
-    /// @notice 获取当前实现合约地址
+    /// @notice Get current implementation contract address
     function implementation() external view returns (address) {
         return ERC1967Utils.getImplementation();
     }
