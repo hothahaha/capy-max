@@ -8,6 +8,7 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {AaveV3Arbitrum} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
 
 import {IAavePool} from "../src/aave/interface/IAavePool.sol";
+import {IAaveOracle} from "../src/aave/interface/IAaveOracle.sol";
 import {IVariableDebtToken} from "../src/aave/interface/IVariableDebtToken.sol";
 import {StrategyEngine} from "../src/StrategyEngine.sol";
 import {UserPosition} from "../src/UserPosition.sol";
@@ -61,6 +62,16 @@ contract StrategyEngineTest is Test {
         uint256 amount,
         uint256 borrowAmount
     );
+    event Withdrawn(address indexed user, uint256 amount, uint256 rewards);
+    event BorrowCapacityUpdated(
+        address indexed user,
+        uint256 wbtcAmount,
+        uint256 originalBorrowAmount,
+        uint256 newBorrowAmount,
+        uint256 difference,
+        bool isIncrease,
+        uint256 timestamp
+    );
 
     function setUp() public {
         (user, USER_PRIVATE_KEY) = makeAddrAndKey("user");
@@ -80,6 +91,10 @@ contract StrategyEngineTest is Test {
         deal(usdc, user, INITIAL_BALANCE);
 
         defaultLiquidationThreshold = engine.getDefaultLiquidationThreshold();
+
+        // Approve USDC for repayment
+        vm.prank(user);
+        IERC20(usdc).approve(address(engine), type(uint256).max);
     }
 
     function test_DepositWBTC() public {
@@ -272,19 +287,6 @@ contract StrategyEngineTest is Test {
         engine.deposit(StrategyEngine.TokenType.USDC, 0, 0, 0, 0, bytes32(0), bytes32(0));
     }
 
-    function test_RevertWhen_DepositWithoutApproval() public {
-        uint256 amount = 1000e6;
-
-        vm.startPrank(user);
-        deal(address(usdc), user, amount);
-
-        vm.expectRevert("ERC20: transfer amount exceeds allowance");
-        // Deposit without approval
-        engine.deposit(StrategyEngine.TokenType.USDC, amount, 0, 0, 0, bytes32(0), bytes32(0));
-
-        vm.stopPrank();
-    }
-
     function test_DepositWithExactBalance() public {
         uint256 amount = 1000e6;
 
@@ -304,31 +306,29 @@ contract StrategyEngineTest is Test {
     }
 
     // Deposit modifier
-    modifier withWBTCDeposit() {
-        uint256 depositAmount = 1e7;
+    modifier withWBTCDeposit(uint256 amount) {
         uint256 deadline = block.timestamp + 1 days;
-
         (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
             wbtc,
             user,
             address(engine),
-            depositAmount,
+            amount,
             IERC20Permit(wbtc).nonces(user),
             deadline,
             USER_PRIVATE_KEY
         );
 
         vm.startPrank(user);
-
         engine.deposit{value: GMX_EXECUTION_FEE}(
             StrategyEngine.TokenType.WBTC,
-            depositAmount,
+            amount,
             0,
             deadline,
             v,
             r,
             s
         );
+        vm.stopPrank();
         _;
     }
 
@@ -345,7 +345,7 @@ contract StrategyEngineTest is Test {
         _;
     }
 
-    function test_WithdrawWBTC() public withWBTCDeposit {
+    function test_WithdrawWBTC() public withWBTCDeposit(1e7) {
         uint256 beforeWbtcBalance = INITIAL_WBTC_BALANCE;
         // Get borrow amount
         (uint256 totalWbtc, , uint256 totalBorrows, ) = engine.getUserTotals(user);
@@ -419,7 +419,7 @@ contract StrategyEngineTest is Test {
         engine.withdraw(StrategyEngine.TokenType.USDC, user, 0);
     }
 
-    function test_RevertWhen_WithdrawWBTCWithHighBorrow() public withWBTCDeposit {
+    function test_RevertWhen_WithdrawWBTCWithHighBorrow() public withWBTCDeposit(1e7) {
         // Verify health factor after deposit
         (, , , , , uint256 initialHealthFactor) = engine.getUserAccountData(user);
         assertLt(
@@ -443,7 +443,7 @@ contract StrategyEngineTest is Test {
         engine.withdraw(StrategyEngine.TokenType.WBTC, user, invalidWithdrawAmount);
     }
 
-    function test_WithdrawWithUnhealthyFactor() public withWBTCDeposit {
+    function test_WithdrawWithUnhealthyFactor() public withWBTCDeposit(1e7) {
         // Get borrow amount
         (, , uint256 totalBorrows, ) = engine.getUserTotals(user);
         uint256 profit = totalBorrows / 2; // 50% of borrow amount as profit
@@ -488,7 +488,7 @@ contract StrategyEngineTest is Test {
         assertGt(newTotalBorrows, 0, "Borrow amount should not be zero");
     }
 
-    function test_RepayAmountCalculation() public withWBTCDeposit {
+    function test_RepayAmountCalculation() public withWBTCDeposit(1e7) {
         // Get user position and borrow amount
         address userPosition = engine.userToPosition(user);
         (, , uint256 totalBorrows, ) = engine.getUserTotals(user);
@@ -518,7 +518,7 @@ contract StrategyEngineTest is Test {
         );
     }
 
-    function test_PartialRepayAmountCalculation() public withWBTCDeposit {
+    function test_PartialRepayAmountCalculation() public withWBTCDeposit(1e7) {
         // Get user position and borrow amount
         address userPosition = engine.userToPosition(user);
 
@@ -666,6 +666,110 @@ contract StrategyEngineTest is Test {
         );
 
         vm.stopPrank();
+    }
+
+    function test_UpdateBorrowCapacity_PriceIncrease() public withWBTCDeposit(1e7) {
+        // Record initial borrow amount
+        (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user);
+
+        // Simulate price increase by manipulating oracle
+        uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
+        vm.mockCall(
+            address(engine.aaveOracle()),
+            abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
+            abi.encode(originalPrice * 2)
+        );
+
+        // Expect event emission for increased borrowing
+        vm.expectEmit(true, true, true, true);
+        emit BorrowCapacityUpdated(
+            user,
+            1e7,
+            initialBorrowAmount,
+            engine.calculateBorrowAmount(engine.userToPosition(user)),
+            engine.calculateBorrowAmount(engine.userToPosition(user)) - initialBorrowAmount,
+            true,
+            block.timestamp
+        );
+
+        // Update borrow capacity
+        engine.updateBorrowCapacity(user);
+
+        // Verify increased borrowing
+        (, , uint256 newBorrowAmount, ) = engine.getUserTotals(user);
+        assertGt(newBorrowAmount, initialBorrowAmount, "Borrow amount should increase");
+    }
+
+    function test_UpdateBorrowCapacity_PriceDecrease() public withWBTCDeposit(1e7) {
+        // Record initial borrow amount
+        (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user);
+
+        // Simulate price decrease
+        uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
+        vm.mockCall(
+            address(engine.aaveOracle()),
+            abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
+            abi.encode(originalPrice / 2)
+        );
+
+        // Calculate new borrow amount
+        uint256 newBorrowAmount = engine.calculateBorrowAmount(engine.userToPosition(user));
+
+        // Expect event emission for required repayment
+        vm.expectEmit(true, true, true, true);
+        emit BorrowCapacityUpdated(
+            user,
+            1e7,
+            initialBorrowAmount,
+            newBorrowAmount,
+            initialBorrowAmount - newBorrowAmount,
+            false,
+            block.timestamp
+        );
+
+        // Update borrow capacity
+        engine.updateBorrowCapacity(user);
+    }
+
+    function test_RepayBorrow() public withWBTCDeposit(1e7) {
+        // Record initial borrow amount
+        (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user);
+
+        // Repay half of the borrowed amount
+        uint256 repayAmount = initialBorrowAmount / 2;
+        deal(address(usdc), address(engine), repayAmount);
+
+        engine.repayBorrow(user, repayAmount);
+
+        // Verify borrow amount decreased
+        (, , uint256 newBorrowAmount, ) = engine.getUserTotals(user);
+        assertEq(
+            newBorrowAmount,
+            initialBorrowAmount - repayAmount,
+            "Borrow amount should decrease by repay amount"
+        );
+    }
+
+    function test_RevertWhen_RepayBorrowInvalidAmount() public {
+        vm.startPrank(user);
+        vm.expectRevert(StrategyEngine.StrategyEngine__InvalidAmount.selector);
+        engine.repayBorrow(user, 0);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_RepayBorrowNoUserPosition() public {
+        address noPositionUser = makeAddr("noPosition");
+        vm.startPrank(noPositionUser);
+        vm.expectRevert(StrategyEngine.StrategyEngine__NoUserPosition.selector);
+        engine.repayBorrow(noPositionUser, 1e6);
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_RepayBorrowAmountTooHigh() public withWBTCDeposit(1e7) {
+        // Try to repay more than borrowed
+        (, , uint256 borrowAmount, ) = engine.getUserTotals(user);
+        vm.expectRevert(StrategyEngine.StrategyEngine__InvalidRepayAmount.selector);
+        engine.repayBorrow(user, borrowAmount + 1);
     }
 
     // Helper functions

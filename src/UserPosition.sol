@@ -26,11 +26,13 @@ contract UserPosition is UUPSUpgradeableBase {
     function initialize(
         address initialOwner,
         address _strategy,
-        address _user
+        address _user,
+        address _multiSig
     ) external initializer {
         __UUPSUpgradeableBase_init(initialOwner);
         strategy = _strategy;
         user = _user;
+        transferUpgradeRights(_multiSig);
     }
 
     modifier onlyStrategy() {

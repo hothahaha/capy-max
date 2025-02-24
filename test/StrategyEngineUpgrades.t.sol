@@ -205,7 +205,7 @@ contract StrategyEngineUpgradesTest is Test {
                 aaveProtocolDataProvider: address(0),
                 cpToken: address(0),
                 vault: address(0),
-                signerManager: address(0),
+                multiSig: address(0),
                 tokenMessenger: address(0),
                 solanaAddress: bytes32(0)
             })
@@ -517,7 +517,7 @@ contract StrategyEngineUpgradesTest is Test {
                 aaveProtocolDataProvider: aaveProtocolDataProvider,
                 cpToken: address(cpToken),
                 vault: address(vault),
-                signerManager: address(signerManager),
+                multiSig: address(multiSig),
                 tokenMessenger: address(tokenMessenger),
                 solanaAddress: solanaAddress
             })

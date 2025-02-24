@@ -31,6 +31,7 @@ contract Vault is Initializable, UUPSUpgradeableBase {
         __UUPSUpgradeableBase_init(msg.sender);
         token = IERC20(_token);
         multiSig = MultiSig(_multiSig);
+        transferUpgradeRights(address(multiSig));
     }
 
     function depositProfit(uint256 amount) external {

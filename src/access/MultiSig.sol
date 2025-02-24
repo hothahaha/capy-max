@@ -42,6 +42,7 @@ contract MultiSig is UUPSUpgradeableBase {
     function initialize(address initialOwner, address _signerManager) external initializer {
         __UUPSUpgradeableBase_init(initialOwner);
         signerManager = SignerManager(_signerManager);
+        transferUpgradeRights(address(this));
     }
 
     function executeTransaction(

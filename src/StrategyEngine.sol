@@ -9,6 +9,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 import {IAavePool} from "./aave/interface/IAavePool.sol";
 import {IAaveOracle} from "./aave/interface/IAaveOracle.sol";
@@ -17,9 +19,8 @@ import {ITokenMessenger} from "./cctp/interface/ITokenMessenger.sol";
 import {CpToken} from "./tokens/CpToken.sol";
 import {Vault} from "./vault/Vault.sol";
 import {UserPosition} from "./UserPosition.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {MultiSig} from "./access/MultiSig.sol";
 import {SignerManager} from "./access/SignerManager.sol";
-import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {IStrategyEngine} from "./interfaces/IStrategyEngine.sol";
 
 /// @title StrategyEngine
@@ -47,6 +48,7 @@ contract StrategyEngine is
     IPoolDataProvider public aaveProtocolDataProvider;
     ITokenMessenger public tokenMessenger;
     CpToken public cpToken;
+    MultiSig public multiSig;
     SignerManager public signerManager;
 
     // Add token type enum
@@ -86,6 +88,15 @@ contract StrategyEngine is
     event Withdrawn(address indexed user, uint256 amount, uint256 rewards);
     event EmergencyAction(address indexed user, string action);
     event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
+    event BorrowCapacityUpdated(
+        address indexed user,
+        uint256 wbtcAmount,
+        uint256 originalBorrowAmount,
+        uint256 newBorrowAmount,
+        uint256 difference,
+        bool isIncrease,
+        uint256 timestamp
+    );
 
     // Errors
     error StrategyEngine__InvalidAmount();
@@ -103,6 +114,8 @@ contract StrategyEngine is
     error StrategyEngine__InvalidFeePercentage();
     error StrategyEngine__Unauthorized();
     error StrategyEngine__InvalidImplementation();
+    error StrategyEngine__NoUserPosition();
+    error StrategyEngine__InvalidRepayAmount();
     // Add status variables
     Vault public vault;
 
@@ -137,9 +150,12 @@ contract StrategyEngine is
         tokenMessenger = ITokenMessenger(params.tokenMessenger);
         cpToken = CpToken(params.cpToken);
         vault = Vault(params.vault);
-        signerManager = SignerManager(params.signerManager);
+        multiSig = MultiSig(params.multiSig);
+        signerManager = SignerManager(address(multiSig.getSignerManager()));
 
         defaultLiquidationThreshold = 156;
+
+        transferUpgradeRights(address(multiSig));
     }
 
     function generateDepositId(
@@ -376,11 +392,15 @@ contract StrategyEngine is
         _createUserPosition(msg.sender);
     }
 
+    function calculateBorrowAmount(address user) external view returns (uint256) {
+        return _calculateBorrowAmount(user);
+    }
+
     function _calculateBorrowAmount(address user) internal view returns (uint256) {
         (
             uint256 totalCollateralBase,
             ,
-            uint256 availableBorrowsBase,
+            ,
             uint256 currentLiquidationThreshold,
             ,
 
@@ -389,11 +409,8 @@ contract StrategyEngine is
         // Check if user has enough collateral
         if (totalCollateralBase == 0) revert StrategyEngine__NoCollateral();
 
-        // Check if user has enough available borrow amount
-        if (availableBorrowsBase == 0) revert StrategyEngine__NoAvailableBorrows();
-
-        // totalCollateralBase * currentLiquidationThreshold / 1.46 = maxBorrowIn
-        // 1.46 Default low health threshold
+        // totalCollateralBase * currentLiquidationThreshold / 1.56 = maxBorrowIn
+        // 1.56 Default low health threshold
         uint256 maxBorrowIn = (totalCollateralBase * currentLiquidationThreshold) /
             (defaultLiquidationThreshold * 10 ** 2);
         uint256 usdcPrice = aaveOracle.getAssetPrice(address(usdc));
@@ -487,7 +504,8 @@ contract StrategyEngine is
             UserPosition.initialize.selector,
             user,
             address(this),
-            user
+            user,
+            address(multiSig)
         );
 
         UserPosition userPosition = new UserPosition{salt: salt}();
@@ -531,5 +549,113 @@ contract StrategyEngine is
     /// @notice Get current implementation contract address
     function implementation() external view returns (address) {
         return ERC1967Utils.getImplementation();
+    }
+
+    /// @notice Update user's borrow capacity
+    /// @dev Only for users who pledged and borrowed from Aave when depositing,
+    /// @dev that is, users in the UserPosition mapping. To obtain the collateral
+    /// @dev value of the current user, you can call the _calculateBorrowAmount function
+    /// @dev to recalculate, and then obtain the user's current borrowing capacity,
+    /// @dev which may be more or less than the historical borrowing amount
+    /// @dev 1. When it is more, call Aave's borrowing again to borrow more,
+    /// @dev cross-chain and update the user's borrowing information, and record Event
+    /// @dev 2. When it is less, record Event, The event records the user's real address,
+    /// @dev the amount of wbtc pledged, the original borrowing amount,
+    /// @dev the amount to borrow and repay, and the date of the update record
+    /// @param user User address
+    function updateBorrowCapacity(address user) external nonReentrant {
+        address userPosition = userToPosition[user];
+        if (userPosition == address(0)) revert StrategyEngine__NoUserPosition();
+
+        // Get user's current info
+        UserInfo storage info = userInfo[user];
+        uint256 currentWbtc = info.totalWbtcDeposited;
+        uint256 currentBorrowAmount = info.totalBorrowAmount;
+
+        // Calculate new borrow capacity
+        uint256 newBorrowAmount = _calculateBorrowAmount(userPosition);
+
+        if (newBorrowAmount > currentBorrowAmount) {
+            // Can borrow more
+            uint256 additionalBorrow = newBorrowAmount - currentBorrowAmount;
+
+            // Execute additional borrow
+            UserPosition(payable(userPosition)).executeBorrow(
+                address(aavePool),
+                address(usdc),
+                additionalBorrow,
+                2, // Variable rate
+                0 // referralCode
+            );
+
+            // Transfer USDC to engine and bridge
+            usdc.safeTransferFrom(userPosition, address(this), additionalBorrow);
+            bridge(additionalBorrow);
+
+            // Update user info
+            info.totalBorrowAmount = newBorrowAmount;
+
+            emit BorrowCapacityUpdated(
+                user,
+                currentWbtc,
+                currentBorrowAmount,
+                newBorrowAmount,
+                additionalBorrow,
+                true,
+                block.timestamp
+            );
+        } else if (newBorrowAmount < currentBorrowAmount) {
+            // Need to repay
+            uint256 repayAmount = currentBorrowAmount - newBorrowAmount;
+
+            emit BorrowCapacityUpdated(
+                user,
+                currentWbtc,
+                currentBorrowAmount,
+                newBorrowAmount,
+                repayAmount,
+                false,
+                block.timestamp
+            );
+        }
+    }
+
+    /// @notice Repay borrowed USDC to Aave
+    /// @dev Directly calls the repay function in UserPosition to repay Aave
+    /// @param user User address
+    /// @param repayAmount Amount to repay
+    function repayBorrow(address user, uint256 repayAmount) external nonReentrant {
+        // Validate inputs
+        if (repayAmount == 0) revert StrategyEngine__InvalidAmount();
+
+        address userPosition = userToPosition[user];
+        if (userPosition == address(0)) revert StrategyEngine__NoUserPosition();
+
+        UserInfo storage info = userInfo[user];
+        if (repayAmount > info.totalBorrowAmount) revert StrategyEngine__InvalidRepayAmount();
+
+        // Transfer USDC to user position for repayment
+        usdc.safeTransfer(userPosition, repayAmount);
+
+        // Execute repayment through user position
+        uint256 actualRepayAmount = UserPosition(payable(userPosition)).executeRepay(
+            address(aavePool),
+            address(usdc),
+            repayAmount,
+            2 // Variable rate
+        );
+
+        // Update user borrow info
+        info.totalBorrowAmount -= actualRepayAmount;
+
+        emit BorrowCapacityUpdated(
+            user,
+            info.totalWbtcDeposited,
+            info.totalBorrowAmount + actualRepayAmount,
+            info.totalBorrowAmount,
+            actualRepayAmount,
+            false,
+            block.timestamp
+        );
     }
 }

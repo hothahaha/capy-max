@@ -45,16 +45,10 @@ contract DeployScript is Script {
         multiSig = deployMultiSig(initialSigner, address(signerManager));
         signerManager.setMultiSig(address(multiSig));
 
-        cpToken = deployCpToken(initialSigner);
+        cpToken = deployCpToken(initialSigner, address(multiSig));
         vault = deployVault(config.usdcAddress, address(multiSig));
-        engine = deployStrategyEngine(
-            config,
-            address(cpToken),
-            address(vault),
-            address(signerManager)
-        );
+        engine = deployStrategyEngine(config, address(cpToken), address(vault), address(multiSig));
 
-        _setupUpgradeRights(engine, cpToken, vault, signerManager, multiSig);
         _transferOwnerships(engine, cpToken, vault, signerManager);
 
         vm.stopBroadcast();
@@ -75,20 +69,6 @@ contract DeployScript is Script {
         ) = helperConfig.activeNetworkConfig();
     }
 
-    function _setupUpgradeRights(
-        StrategyEngine engine,
-        CpToken cpToken,
-        Vault vault,
-        SignerManager signerManager,
-        MultiSig multiSig
-    ) internal {
-        multiSig.transferUpgradeRights(address(multiSig));
-        signerManager.transferUpgradeRights(address(multiSig));
-        vault.transferUpgradeRights(address(multiSig));
-        cpToken.transferUpgradeRights(address(multiSig));
-        engine.transferUpgradeRights(address(multiSig));
-    }
-
     function _transferOwnerships(
         StrategyEngine engine,
         CpToken cpToken,
@@ -100,14 +80,9 @@ contract DeployScript is Script {
         signerManager.transferOwnership(address(engine));
     }
 
-    function deploySignerManager(
-        address initialSigner
-    ) internal returns (SignerManager) {
+    function deploySignerManager(address initialSigner) internal returns (SignerManager) {
         SignerManager signerManagerImpl = new SignerManager();
-        ERC1967Proxy signerManagerProxy = new ERC1967Proxy(
-            address(signerManagerImpl),
-            ""
-        );
+        ERC1967Proxy signerManagerProxy = new ERC1967Proxy(address(signerManagerImpl), "");
         SignerManager manager = SignerManager(address(signerManagerProxy));
         manager.initialize(initialSigner, 1);
         return manager;
@@ -118,32 +93,19 @@ contract DeployScript is Script {
         address signerManager
     ) internal returns (MultiSig) {
         MultiSig multiSigImpl = new MultiSig();
-        ERC1967Proxy multiSigProxy = new ERC1967Proxy(
-            address(multiSigImpl),
-            ""
-        );
-        MultiSig(address(multiSigProxy)).initialize(
-            initialSigner,
-            signerManager
-        );
+        ERC1967Proxy multiSigProxy = new ERC1967Proxy(address(multiSigImpl), "");
+        MultiSig(address(multiSigProxy)).initialize(initialSigner, signerManager);
         return MultiSig(address(multiSigProxy));
     }
 
-    function deployCpToken(address initialSigner) internal returns (CpToken) {
+    function deployCpToken(address initialSigner, address multiSig) internal returns (CpToken) {
         CpToken cpTokenImpl = new CpToken();
         ERC1967Proxy cpTokenProxy = new ERC1967Proxy(address(cpTokenImpl), "");
-        CpToken(address(cpTokenProxy)).initialize(
-            initialSigner,
-            "Compound BTC",
-            "cpBTC"
-        );
+        CpToken(address(cpTokenProxy)).initialize(initialSigner, "Compound BTC", "cpBTC", multiSig);
         return CpToken(address(cpTokenProxy));
     }
 
-    function deployVault(
-        address usdc,
-        address multiSig
-    ) internal returns (Vault) {
+    function deployVault(address usdc, address multiSig) internal returns (Vault) {
         Vault vaultImpl = new Vault();
         ERC1967Proxy vaultProxy = new ERC1967Proxy(address(vaultImpl), "");
         Vault(address(vaultProxy)).initialize(usdc, multiSig);
@@ -154,24 +116,23 @@ contract DeployScript is Script {
         DeployConfig memory config,
         address cpToken,
         address vault,
-        address signerManager
+        address multiSig
     ) internal returns (StrategyEngine) {
         StrategyEngine engineImpl = new StrategyEngine();
         ERC1967Proxy engineProxy = new ERC1967Proxy(address(engineImpl), "");
 
-        StrategyEngine.EngineInitParams memory params = IStrategyEngine
-            .EngineInitParams({
-                wbtc: config.wbtcAddress,
-                usdc: config.usdcAddress,
-                aavePool: config.aavePool,
-                aaveOracle: config.aaveOracle,
-                aaveProtocolDataProvider: config.aaveProtocolDataProvider,
-                cpToken: cpToken,
-                vault: vault,
-                signerManager: signerManager,
-                tokenMessenger: config.tokenMessenger,
-                solanaAddress: config.solanaAddress
-            });
+        StrategyEngine.EngineInitParams memory params = IStrategyEngine.EngineInitParams({
+            wbtc: config.wbtcAddress,
+            usdc: config.usdcAddress,
+            aavePool: config.aavePool,
+            aaveOracle: config.aaveOracle,
+            aaveProtocolDataProvider: config.aaveProtocolDataProvider,
+            cpToken: cpToken,
+            vault: vault,
+            multiSig: multiSig,
+            tokenMessenger: config.tokenMessenger,
+            solanaAddress: config.solanaAddress
+        });
 
         StrategyEngine(address(engineProxy)).initialize(params);
 

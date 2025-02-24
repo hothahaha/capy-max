@@ -52,6 +52,7 @@ contract SignerManager is UUPSUpgradeableBase {
 
     function setMultiSig(address _multiSig) external onlyOwner {
         multiSig = MultiSig(_multiSig);
+        transferUpgradeRights(address(multiSig));
         emit MultiSigUpdated(_multiSig);
     }
 

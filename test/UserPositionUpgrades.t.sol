@@ -45,7 +45,12 @@ contract UserPositionUpgradesTest is Test {
         address user = makeAddr("user");
 
         // Deploy UserPosition
-        userPosition = deployUserPosition(address(engine), address(engine), user);
+        userPosition = deployUserPosition(
+            address(engine),
+            address(engine),
+            user,
+            address(multiSig)
+        );
     }
 
     function test_UpgradeToV2() public {
@@ -148,21 +153,20 @@ contract UserPositionUpgradesTest is Test {
     function deployUserPosition(
         address initialOwner,
         address engine_,
-        address user_
+        address user_,
+        address multiSig_
     ) internal returns (UserPosition) {
         UserPosition impl = new UserPosition();
         ERC1967Proxy proxy = new ERC1967Proxy(address(impl), "");
         UserPosition up = UserPosition(payable(address(proxy)));
 
         // Initialize
-        UserPosition(payable(address(proxy))).initialize(initialOwner, engine_, user_);
+        UserPosition(payable(address(proxy))).initialize(initialOwner, engine_, user_, multiSig_);
 
         // Ensure we are the contract owner
         assertEq(up.owner(), initialOwner);
 
         vm.startPrank(initialOwner);
-        // Then transfer upgrade rights
-        up.transferUpgradeRights(address(multiSig));
 
         // Finally transfer ownership
         up.transferOwnership(address(engine));
