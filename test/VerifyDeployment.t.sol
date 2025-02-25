@@ -14,23 +14,43 @@ import {UUPSUpgradeableBase} from "../src/upgradeable/UUPSUpgradeableBase.sol";
 import {ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract VerifyDeploymentTest is Test {
+    struct TestParams {
+        address target;
+        bytes data;
+        uint256 deadline;
+        bytes[] signatures;
+    }
+
+    struct SignerParams {
+        address signer;
+        uint256 deadline;
+        bytes[] signatures;
+        bytes data;
+    }
+
+    struct UpgradeTestParams {
+        address implementation;
+        bytes[] signatures;
+        uint256 deadline;
+        bytes32 txHash;
+    }
+
     VerifyDeployment public verifier;
     MultiSig public multiSig;
     SignerManager public signerManager;
     HelperConfig public helperConfig;
-    address public owner;
-    address public signer1;
-    address public signer2;
-    uint256 public signer1Key;
-    uint256 public signer2Key;
-    uint256 public deployerKey;
     Vault public vault;
     StrategyEngine public engine;
     address public vaultProxy;
     address public engineProxy;
 
+    address public signer1;
+    address public signer2;
+    uint256 public signer1Key;
+    uint256 public signer2Key;
+    uint256 public deployerKey;
+
     function setUp() public {
-        // Deploy infrastructure
         DeployScript deployer = new DeployScript();
         (engine, , vault, signerManager, multiSig, helperConfig) = deployer.run();
         vaultProxy = address(vault);
@@ -38,21 +58,59 @@ contract VerifyDeploymentTest is Test {
         (, , , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
         verifier = new VerifyDeployment();
 
-        // Set test accounts
         (signer1, signer1Key) = makeAddrAndKey("signer1");
         (signer2, signer2Key) = makeAddrAndKey("signer2");
 
-        // Add signers
         _addSigner(signer1);
         _addSigner(signer2);
-        _updateThreshold(2); // Set threshold to 2
+        _updateThreshold(2);
     }
 
-    function test_VerifyAndDeploy() public {
+    function _prepareUpgradeTest(address implementation) internal view returns (TestParams memory) {
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory upgradeData = abi.encodeWithSelector(
+            ITransparentUpgradeableProxy.upgradeToAndCall.selector,
+            implementation,
+            ""
+        );
+
+        bytes32 txHash = multiSig.hashTransaction(
+            vaultProxy,
+            upgradeData,
+            multiSig.nonce(),
+            deadline
+        );
+
+        bytes[] memory signatures = new bytes[](2);
+        signatures[0] = _signTransaction(signer1Key, txHash);
+        signatures[1] = _signTransaction(signer2Key, txHash);
+
+        return
+            TestParams({
+                target: vaultProxy,
+                data: upgradeData,
+                deadline: deadline,
+                signatures: signatures
+            });
+    }
+
+    function _signTransaction(
+        uint256 privateKey,
+        bytes32 txHash
+    ) internal pure returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, txHash);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _executeMultiSigTx(TestParams memory params) internal {
+        vm.prank(vm.addr(deployerKey));
+        multiSig.executeTransaction(params.target, params.data, params.deadline, params.signatures);
+    }
+
+    function _prepareDeployTest() internal view returns (TestParams memory) {
         uint256 deadline = block.timestamp + 1 days;
         bytes memory deployData = abi.encodeWithSelector(DeployScript.run.selector);
 
-        // Get transaction hash
         bytes32 txHash = multiSig.hashTransaction(
             address(verifier),
             deployData,
@@ -60,13 +118,22 @@ contract VerifyDeploymentTest is Test {
             deadline
         );
 
-        // Get signatures
         bytes[] memory signatures = new bytes[](2);
         signatures[0] = _signTransaction(signer1Key, txHash);
         signatures[1] = _signTransaction(signer2Key, txHash);
 
-        // Execute verification and deployment
-        verifier.verifyAndDeploy(address(multiSig), signatures, deadline);
+        return
+            TestParams({
+                target: address(verifier),
+                data: deployData,
+                deadline: deadline,
+                signatures: signatures
+            });
+    }
+
+    function test_VerifyAndDeploy() public {
+        TestParams memory params = _prepareDeployTest();
+        verifier.verifyAndDeploy(address(multiSig), params.signatures, params.deadline);
     }
 
     function test_RevertWhen_DeadlineExpired() public {
@@ -86,92 +153,58 @@ contract VerifyDeploymentTest is Test {
     }
 
     function test_RevertWhen_InvalidSignature() public {
-        uint256 deadline = block.timestamp + 1 days;
-        bytes memory deployData = abi.encodeWithSelector(DeployScript.run.selector);
-
-        bytes32 txHash = multiSig.hashTransaction(
-            address(verifier),
-            deployData,
-            multiSig.nonce(),
-            deadline
-        );
-
-        // 使用未授权的签名者
+        TestParams memory params = _prepareDeployTest();
         (, uint256 invalidKey) = makeAddrAndKey("invalidSigner");
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = _signTransaction(signer1Key, txHash);
-        signatures[1] = _signTransaction(invalidKey, txHash);
+        params.signatures[1] = _signTransaction(invalidKey, keccak256("invalid"));
 
         vm.expectRevert(VerifyDeployment.VerifyDeployment__InvalidSignature.selector);
-        verifier.verifyAndDeploy(address(multiSig), signatures, deadline);
+        verifier.verifyAndDeploy(address(multiSig), params.signatures, params.deadline);
     }
 
     function test_VerifyAndUpgrade() public {
         // Deploy new implementation contract
         Vault newImplementation = new Vault();
 
-        uint256 deadline = block.timestamp + 1 days;
-        bytes memory upgradeData = abi.encodeWithSelector(
-            ITransparentUpgradeableProxy.upgradeToAndCall.selector,
-            address(newImplementation),
-            ""
-        );
-
-        // Get transaction hash
-        bytes32 txHash = multiSig.hashTransaction(
-            vaultProxy,
-            upgradeData,
-            multiSig.nonce(),
-            deadline
-        );
-
-        // Get signatures
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = _signTransaction(signer1Key, txHash);
-        signatures[1] = _signTransaction(signer2Key, txHash);
+        TestParams memory params = _prepareUpgradeTest(address(newImplementation));
 
         // Execute verification and upgrade
         verifier.verifyAndUpgrade(
             address(multiSig),
-            vaultProxy,
+            params.target,
             address(newImplementation),
-            signatures,
-            deadline
+            params.signatures,
+            params.deadline
         );
 
         // Verify upgrade success
-        assertEq(Vault(vaultProxy).implementation(), address(newImplementation));
+        assertEq(Vault(params.target).implementation(), address(newImplementation));
+    }
+
+    function _testRevertWithError(
+        address implementation,
+        bytes4 errorSelector,
+        TestParams memory params
+    ) internal {
+        vm.expectRevert(errorSelector);
+        verifier.verifyAndUpgrade(
+            address(multiSig),
+            params.target,
+            implementation,
+            params.signatures,
+            params.deadline
+        );
     }
 
     function test_RevertWhen_UpgradeWithInvalidSignatures() public {
-        Vault newImplementation = new Vault();
-        uint256 deadline = block.timestamp + 1 days;
-        bytes memory upgradeData = abi.encodeWithSelector(
-            ITransparentUpgradeableProxy.upgradeToAndCall.selector,
-            address(newImplementation),
-            ""
-        );
-
-        bytes32 txHash = multiSig.hashTransaction(
-            vaultProxy,
-            upgradeData,
-            multiSig.nonce(),
-            deadline
-        );
-
-        // Use unauthorized signer
         (, uint256 invalidKey) = makeAddrAndKey("invalidSigner");
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = _signTransaction(signer1Key, txHash);
-        signatures[1] = _signTransaction(invalidKey, txHash);
+        uint256[] memory keys = new uint256[](2);
+        keys[0] = signer1Key;
+        keys[1] = invalidKey;
 
-        vm.expectRevert(VerifyDeployment.VerifyDeployment__InvalidSignature.selector);
-        verifier.verifyAndUpgrade(
-            address(multiSig),
-            vaultProxy,
-            address(newImplementation),
-            signatures,
-            deadline
+        _testRevertWithError(
+            address(new Vault()),
+            VerifyDeployment.VerifyDeployment__InvalidSignature.selector,
+            _prepareUpgradeParams(address(new Vault()), keys)
         );
     }
 
@@ -179,75 +212,52 @@ contract VerifyDeploymentTest is Test {
         // Deploy new implementation contract
         StrategyEngine newImplementation = new StrategyEngine();
 
-        uint256 deadline = block.timestamp + 1 days;
-        bytes memory upgradeData = abi.encodeWithSelector(
-            ITransparentUpgradeableProxy.upgradeToAndCall.selector,
-            address(newImplementation),
-            ""
-        );
-
-        bytes32 txHash = multiSig.hashTransaction(
-            engineProxy,
-            upgradeData,
-            multiSig.nonce(),
-            deadline
-        );
-
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = _signTransaction(signer1Key, txHash);
-        signatures[1] = _signTransaction(signer2Key, txHash);
+        TestParams memory params = _prepareUpgradeTest(address(newImplementation));
 
         verifier.verifyAndUpgrade(
             address(multiSig),
-            engineProxy,
+            params.target,
             address(newImplementation),
-            signatures,
-            deadline
+            params.signatures,
+            params.deadline
         );
 
-        assertEq(StrategyEngine(engineProxy).implementation(), address(newImplementation));
+        assertEq(StrategyEngine(params.target).implementation(), address(newImplementation));
     }
 
     function test_RevertWhen_UpgradeToZeroAddress() public {
-        uint256 deadline = block.timestamp + 1 days;
-        bytes memory upgradeData = abi.encodeWithSelector(
-            ITransparentUpgradeableProxy.upgradeToAndCall.selector,
-            address(0),
-            ""
-        );
-
-        bytes32 txHash = multiSig.hashTransaction(
-            vaultProxy,
-            upgradeData,
-            multiSig.nonce(),
-            deadline
-        );
-
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = _signTransaction(signer1Key, txHash);
-        signatures[1] = _signTransaction(signer2Key, txHash);
+        TestParams memory params = _prepareUpgradeTest(address(0));
 
         vm.expectRevert(VerifyDeployment.VerifyDeployment__UpgradeFailed.selector);
-        verifier.verifyAndUpgrade(address(multiSig), vaultProxy, address(0), signatures, deadline);
+        verifier.verifyAndUpgrade(
+            address(multiSig),
+            params.target,
+            address(0),
+            params.signatures,
+            params.deadline
+        );
     }
 
     function test_RevertWhen_UpgradeWithExpiredDeadline() public {
         Vault newImplementation = new Vault();
-        uint256 deadline = block.timestamp - 1;
+        TestParams memory params = _prepareUpgradeTest(address(newImplementation));
+
+        // 确保先检查过期时间
+        uint256 expiredDeadline = block.timestamp - 1;
 
         vm.expectRevert(VerifyDeployment.VerifyDeployment__Expired.selector);
         verifier.verifyAndUpgrade(
             address(multiSig),
-            vaultProxy,
+            params.target,
             address(newImplementation),
-            new bytes[](2),
-            deadline
+            params.signatures, // 使用有效签名
+            expiredDeadline // 使用过期时间
         );
     }
 
     function test_RevertWhen_UpgradeWithInsufficientSignatures() public {
         Vault newImplementation = new Vault();
-        uint256 deadline = block.timestamp + 1 days;
+        TestParams memory params = _prepareUpgradeTest(address(newImplementation));
 
         bytes[] memory signatures = new bytes[](1);
         signatures[0] = _signTransaction(signer1Key, keccak256("dummy hash"));
@@ -255,19 +265,90 @@ contract VerifyDeploymentTest is Test {
         vm.expectRevert(VerifyDeployment.VerifyDeployment__InsufficientSignatures.selector);
         verifier.verifyAndUpgrade(
             address(multiSig),
-            vaultProxy,
+            params.target,
             address(newImplementation),
             signatures,
-            deadline
+            params.deadline
         );
     }
 
     function test_RevertWhen_UpgradeWithDuplicateSignatures() public {
         Vault newImplementation = new Vault();
+        uint256[] memory keys = new uint256[](2);
+        keys[0] = signer1Key;
+        keys[1] = signer1Key;
+
+        TestParams memory params = _prepareUpgradeParams(address(newImplementation), keys);
+
+        vm.expectRevert(VerifyDeployment.VerifyDeployment__DuplicateSigner.selector);
+        verifier.verifyAndUpgrade(
+            address(multiSig),
+            params.target,
+            address(newImplementation),
+            params.signatures,
+            params.deadline
+        );
+    }
+
+    // Helper functions
+    function _addSigner(address signer) internal {
+        bytes memory data = abi.encodeWithSelector(SignerManager.addSigner.selector, signer);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes[] memory signatures = new bytes[](1);
+
+        signatures[0] = _signTransaction(
+            deployerKey,
+            multiSig.hashTransaction(address(signerManager), data, multiSig.nonce(), deadline)
+        );
+
+        _executeMultiSigTx(
+            TestParams({
+                target: address(signerManager),
+                data: data,
+                deadline: deadline,
+                signatures: signatures
+            })
+        );
+    }
+
+    function _updateThreshold(uint256 newThreshold) internal {
+        _executeMultiSigTx(
+            TestParams({
+                target: address(signerManager),
+                data: abi.encodeWithSelector(SignerManager.updateThreshold.selector, newThreshold),
+                deadline: block.timestamp + 1 days,
+                signatures: _getSignatures(
+                    deployerKey,
+                    address(signerManager),
+                    abi.encodeWithSelector(SignerManager.updateThreshold.selector, newThreshold)
+                )
+            })
+        );
+    }
+
+    function _getSignatures(
+        uint256 signerKey,
+        address target,
+        bytes memory data
+    ) internal view returns (bytes[] memory) {
+        bytes[] memory signatures = new bytes[](1);
+        uint256 deadline = block.timestamp + 1 days;
+
+        signatures[0] = _signTransaction(
+            signerKey,
+            multiSig.hashTransaction(target, data, multiSig.nonce(), deadline)
+        );
+        return signatures;
+    }
+
+    function _prepareUpgradeParams(
+        address implementation,
+        uint256[] memory signerKeys
+    ) internal view returns (TestParams memory) {
         uint256 deadline = block.timestamp + 1 days;
         bytes memory upgradeData = abi.encodeWithSelector(
             ITransparentUpgradeableProxy.upgradeToAndCall.selector,
-            address(newImplementation),
+            implementation,
             ""
         );
 
@@ -278,65 +359,27 @@ contract VerifyDeploymentTest is Test {
             deadline
         );
 
-        bytes[] memory signatures = new bytes[](2);
-        signatures[0] = _signTransaction(signer1Key, txHash);
-        signatures[1] = _signTransaction(signer1Key, txHash); // 重复签名
-
-        vm.expectRevert(VerifyDeployment.VerifyDeployment__DuplicateSigner.selector);
-        verifier.verifyAndUpgrade(
-            address(multiSig),
-            vaultProxy,
-            address(newImplementation),
-            signatures,
-            deadline
-        );
+        return
+            TestParams({
+                target: vaultProxy,
+                data: upgradeData,
+                deadline: deadline,
+                signatures: _generateSignatures(txHash, signerKeys)
+            });
     }
 
-    // Helper functions
-    function _addSigner(address signer) internal {
-        bytes memory data = abi.encodeWithSelector(SignerManager.addSigner.selector, signer);
-        uint256 deadline = block.timestamp + 1 days;
+    function _generateSignatures(
+        bytes32 txHash,
+        uint256[] memory signerKeys
+    ) internal pure returns (bytes[] memory) {
+        bytes[] memory signatures = new bytes[](signerKeys.length);
 
-        bytes32 txHash = multiSig.hashTransaction(
-            address(signerManager),
-            data,
-            multiSig.nonce(),
-            deadline
-        );
+        unchecked {
+            for (uint256 i; i < signerKeys.length; ++i) {
+                signatures[i] = _signTransaction(signerKeys[i], txHash);
+            }
+        }
 
-        bytes[] memory signatures = new bytes[](1);
-        signatures[0] = _signTransaction(deployerKey, txHash);
-
-        vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
-    }
-
-    function _updateThreshold(uint256 newThreshold) internal {
-        bytes memory data = abi.encodeWithSelector(
-            SignerManager.updateThreshold.selector,
-            newThreshold
-        );
-        uint256 deadline = block.timestamp + 1 days;
-
-        bytes32 txHash = multiSig.hashTransaction(
-            address(signerManager),
-            data,
-            multiSig.nonce(),
-            deadline
-        );
-
-        bytes[] memory signatures = new bytes[](1);
-        signatures[0] = _signTransaction(deployerKey, txHash);
-
-        vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(address(signerManager), data, deadline, signatures);
-    }
-
-    function _signTransaction(
-        uint256 privateKey,
-        bytes32 digest
-    ) internal pure returns (bytes memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
-        return abi.encodePacked(r, s, v);
+        return signatures;
     }
 }
