@@ -9,23 +9,13 @@ import {StrategyEngine} from "../src/StrategyEngine.sol";
 import {DeployScript} from "../script/Deploy.s.sol";
 import {HelperConfig} from "../script/HelperConfig.s.sol";
 import {UUPSUpgradeableBase} from "../src/upgradeable/UUPSUpgradeableBase.sol";
+import {BaseV2Contract} from "./upgrades/BaseV2Contract.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-contract UserPositionV2 is UserPosition {
-    uint256 public newVariable;
-    bool public newFunctionCalled;
-
-    function setNewVariable(uint256 _value) external {
-        newVariable = _value;
-    }
-
-    function version() external pure returns (string memory) {
-        return "V2";
-    }
-
-    function newFunction() external {
-        newFunctionCalled = true;
+contract UserPositionV2 is UserPosition, BaseV2Contract {
+    function getDefaultLockPeriod() external pure returns (uint256) {
+        return 7 days;
     }
 }
 
@@ -53,6 +43,7 @@ contract UserPositionUpgradesTest is BaseContractUpgradeTest {
 
     function validateUpgrade() public override {
         assertEq(UserPositionV2(payable(address(userPosition))).version(), "V2");
+        assertEq(UserPositionV2(payable(address(userPosition))).getDefaultLockPeriod(), 7 days);
 
         // Test new functionality
         UserPositionV2(payable(address(userPosition))).newFunction();

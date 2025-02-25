@@ -1,25 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Test} from "forge-std/Test.sol";
+import {BaseContractUpgradeTest} from "./BaseContractUpgradeTest.sol";
 import {SignerManager} from "../../src/access/SignerManager.sol";
-import {BaseContractUpgradeTest} from "../upgrades/BaseContractUpgradeTest.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
+import {BaseV2Contract} from "./BaseV2Contract.sol";
 
-contract SignerManagerV2 is SignerManager {
-    uint256 public newVariable;
-
-    function setNewVariable(uint256 _value) external {
-        newVariable = _value;
-    }
-
-    function version() external pure returns (string memory) {
-        return "V2";
+contract SignerManagerV2 is SignerManager, BaseV2Contract {
+    function getMaxSigners() external pure returns (uint256) {
+        return 10;
     }
 }
 
 contract SignerManagerUpgradesTest is BaseContractUpgradeTest {
-    SignerManagerV2 public signerManagerV2;
+    SignerManagerV2 internal signerManagerV2;
 
     function setUp() public {
         DeployScript deploy = new DeployScript();
@@ -36,7 +30,32 @@ contract SignerManagerUpgradesTest is BaseContractUpgradeTest {
         return address(signerManagerV2);
     }
 
-    function validateUpgrade() public view override {
+    function validateUpgrade() public override {
         assertEq(SignerManagerV2(address(signerManager)).version(), "V2");
+        assertEq(SignerManagerV2(address(signerManager)).getMaxSigners(), 10);
+
+        // Test new functionality
+        SignerManagerV2(address(signerManager)).newFunction();
+        assertTrue(SignerManagerV2(address(signerManager)).newFunctionCalled());
+    }
+
+    function test_StorageSlotConsistency() public {
+        address newSigner = makeAddr("newSigner");
+
+        // Set initial state
+        vm.startPrank(address(multiSig));
+        signerManager.addSigner(newSigner);
+        vm.stopPrank();
+
+        // Perform upgrade
+        address implementation = getNewImplementation();
+        UpgradeTestParams memory params = _prepareUpgradeTest(
+            getUpgradeableContract(),
+            implementation
+        );
+        _executeUpgradeTest(params);
+
+        // Verify data preservation
+        assertTrue(signerManager.isSigner(newSigner), "Signer not preserved");
     }
 }

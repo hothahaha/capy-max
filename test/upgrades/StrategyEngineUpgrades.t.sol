@@ -16,6 +16,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {UUPSUpgradeableBase} from "../../src/upgradeable/UUPSUpgradeableBase.sol";
 import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {BaseV2Contract} from "./BaseV2Contract.sol";
+import {ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract StrategyEngineV2 is StrategyEngine, BaseV2Contract {
     function getDefaultPlatformFee() external pure returns (uint256) {
@@ -42,8 +43,6 @@ contract StrategyEngineUpgradesTest is BaseContractUpgradeTest {
     uint256 public signer1Key;
 
     // 存储槽常量
-    bytes32 public constant IMPLEMENTATION_SLOT =
-        0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
     bytes32 public constant ADMIN_SLOT =
         0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
 
@@ -115,19 +114,17 @@ contract StrategyEngineUpgradesTest is BaseContractUpgradeTest {
         vm.prank(vm.addr(deployerKey));
         engine.updatePlatformFee(700);
 
-        // Prepare initialization data
-        bytes memory data = abi.encodeWithSelector(engineV2.setNewVariable.selector, 999);
-
         // Perform upgrade with initialization
         UpgradeTestParams memory params = _prepareUpgradeTest(
             getUpgradeableContract(),
             address(engineV2)
         );
-        params.data = data;
         _executeUpgradeTest(params);
 
+        engineV2.setNewVariable(999);
+
         // Verify initialization
-        assertEq(StrategyEngineV2(address(engine)).newVariable(), 999);
+        assertEq(engineV2.newVariable(), 999);
         assertEq(engine.getPlatformFee(), 700, "Platform fee not preserved");
     }
 
