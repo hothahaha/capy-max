@@ -11,6 +11,7 @@ import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC2
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IAavePool} from "./aave/interface/IAavePool.sol";
 import {IAaveOracle} from "./aave/interface/IAaveOracle.sol";
@@ -122,6 +123,17 @@ contract StrategyEngine is
     // Add user position mapping
     mapping(address => address) public userToPosition;
     mapping(address => address) public positionToUser;
+
+    // Storage all users
+    address[] public allUsers;
+    // Map user address to array index
+    mapping(address => uint256) public userIndices;
+    // Last health check timestamp
+    uint256 public lastHealthCheckTimestamp;
+    // Maximum number of users to process each time
+    uint256 public constant BATCH_SIZE = 10;
+    // Start index of current batch
+    uint256 public currentBatchIndex;
 
     modifier onlySigner() {
         if (!signerManager.isSigner(msg.sender)) {
@@ -516,6 +528,9 @@ contract StrategyEngine is
         userToPosition[user] = positionAddress;
         positionToUser[positionAddress] = user;
 
+        // Add user to array
+        _addUserToArray(user);
+
         return positionAddress;
     }
 
@@ -563,7 +578,7 @@ contract StrategyEngine is
     /// @dev the amount of wbtc pledged, the original borrowing amount,
     /// @dev the amount to borrow and repay, and the date of the update record
     /// @param user User address
-    function updateBorrowCapacity(address user) external nonReentrant {
+    function _updateBorrowCapacity(address user) internal nonReentrant {
         address userPosition = userToPosition[user];
         if (userPosition == address(0)) revert StrategyEngine__NoUserPosition();
 
@@ -657,5 +672,63 @@ contract StrategyEngine is
             false,
             block.timestamp
         );
+    }
+
+    // Add user to array internal function
+    function _addUserToArray(address user) internal {
+        if (userIndices[user] == 0 && allUsers.length > 0 && allUsers[0] != user) {
+            userIndices[user] = allUsers.length;
+            allUsers.push(user);
+        } else if (allUsers.length == 0) {
+            userIndices[user] = 0;
+            allUsers.push(user);
+        }
+    }
+
+    // Chainlink Automation check function
+    function checkUpkeep(
+        bytes calldata /* checkData */
+    ) external view returns (bool upkeepNeeded, bytes memory /* performData */) {
+        // Check if 1 hour has passed
+        upkeepNeeded = (block.timestamp - lastHealthCheckTimestamp) >= 1 hours;
+        return (upkeepNeeded, "");
+    }
+
+    // Chainlink Automation perform function
+    function performUpkeep(bytes calldata /* performData */) external {
+        // Check if 1 hour has passed
+        if ((block.timestamp - lastHealthCheckTimestamp) < 1 hours) {
+            return;
+        }
+
+        // Execute health check
+        scheduledHealthCheck();
+
+        // Update last execution time
+        lastHealthCheckTimestamp = block.timestamp;
+    }
+
+    function updateBorrowCapacity(address user) external {
+        _updateBorrowCapacity(user);
+    }
+
+    // Scheduled health check function
+    function scheduledHealthCheck() public {
+        uint256 endIndex = Math.min(currentBatchIndex + BATCH_SIZE, allUsers.length);
+
+        // Process users in current batch
+        for (uint256 i = currentBatchIndex; i < endIndex; i++) {
+            address user = allUsers[i];
+            if (userToPosition[user] != address(0)) {
+                _updateBorrowCapacity(user);
+            }
+        }
+
+        // Update start index of next batch
+        if (endIndex >= allUsers.length) {
+            currentBatchIndex = 0;
+        } else {
+            currentBatchIndex = endIndex;
+        }
     }
 }
