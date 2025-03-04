@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {BaseContractUpgradeTest} from "./upgrades/BaseContractUpgradeTest.sol";
-import {UserPosition} from "../src/UserPosition.sol";
-import {MultiSig} from "../src/access/MultiSig.sol";
-import {SignerManager} from "../src/access/SignerManager.sol";
-import {StrategyEngine} from "../src/StrategyEngine.sol";
-import {DeployScript} from "../script/Deploy.s.sol";
-import {HelperConfig} from "../script/HelperConfig.s.sol";
-import {UUPSUpgradeableBase} from "../src/upgradeable/UUPSUpgradeableBase.sol";
-import {BaseV2Contract} from "./upgrades/BaseV2Contract.sol";
+import {BaseContractUpgradeTest} from "./BaseContractUpgradeTest.sol";
+import {UserPosition} from "../../src/UserPosition.sol";
+import {MultiSig} from "../../src/access/MultiSig.sol";
+import {SignerManager} from "../../src/access/SignerManager.sol";
+import {StrategyEngine} from "../../src/StrategyEngine.sol";
+import {DeployScript} from "../../script/Deploy.s.sol";
+import {HelperConfig} from "../../script/HelperConfig.s.sol";
+import {UUPSUpgradeableBase} from "../../src/upgradeable/UUPSUpgradeableBase.sol";
+import {BaseV2Contract} from "./BaseV2Contract.sol";
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
