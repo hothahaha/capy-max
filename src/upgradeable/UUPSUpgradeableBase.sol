@@ -44,6 +44,12 @@ abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
         return _upgradeRightsOwner;
     }
 
+    /// @notice Get current implementation contract address
+    /// @return The address of the current implementation contract
+    function implementation() public view returns (address) {
+        return ERC1967Utils.getImplementation();
+    }
+
     function _authorizeUpgrade(address newImplementation) internal view override {
         // Check if new implementation contract address is zero address
         if (newImplementation == address(0)) {

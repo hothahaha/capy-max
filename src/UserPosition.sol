@@ -10,13 +10,15 @@ import {IAavePool} from "./aave/interface/IAavePool.sol";
 contract UserPosition is UUPSUpgradeableBase {
     using SafeERC20 for IERC20;
 
-    address public strategy;
-    address public user;
-
+    // Errors
     error UserPosition__Unauthorized();
     error UserPosition__TransferFailed();
     error UserPosition__InvalidAmount();
     error UserPosition__TransferNotAllowed();
+
+    // State variables
+    address public strategy;
+    address public user;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {

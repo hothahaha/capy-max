@@ -11,16 +11,19 @@ import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.s
 contract Vault is Initializable, UUPSUpgradeableBase {
     using SafeERC20 for IERC20;
 
+    // Errors
     error Vault__InvalidAmount();
     error Vault__InsufficientBalance();
     error Vault__TransferFailed();
     error Vault__Unauthorized();
 
-    IERC20 public token;
-    MultiSig public multiSig;
-
+    // Events
     event Deposit(address indexed token, uint256 amount);
     event Withdraw(address indexed token, uint256 amount);
+
+    // State variables
+    IERC20 public token;
+    MultiSig public multiSig;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -51,10 +54,5 @@ contract Vault is Initializable, UUPSUpgradeableBase {
 
     function getBalance() external view returns (uint256) {
         return token.balanceOf(address(this));
-    }
-
-    /// @notice Get current implementation contract address
-    function implementation() external view returns (address) {
-        return ERC1967Utils.getImplementation();
     }
 }

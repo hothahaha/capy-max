@@ -43,31 +43,31 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
 
         deployer = vm.addr(deployerKey);
 
-        // 部署处理器合约
+        // Deploy handler contract
         handler = new StrategyEngineHandler(address(engine), wbtc, usdc, aaveOracle, deployer);
 
-        // 给处理器合约分配代币
+        // Assign tokens to handler contract
         deal(wbtc, address(handler), 1_000_000e8);
         deal(usdc, address(handler), 1_000_000e6);
 
-        // 设置不变量测试目标
+        // Set target for invariant tests
         targetContract(address(handler));
 
-        // 设置更小的调用序列长度和深度
+        // Set smaller call sequence length and depth
         vm.setEnv("FOUNDRY_INVARIANT_RUNS", "10");
         vm.setEnv("FOUNDRY_INVARIANT_DEPTH", "10");
 
-        // 启用 RPC 缓存以提高 fork 模式下的性能
+        // Enable RPC cache for better performance in fork mode
         vm.setEnv("FOUNDRY_RPC_CACHE", "true");
 
-        // 初始化 lastVaultBalance
+        // Initialize lastVaultBalance
         handler.updateLastVaultBalance();
     }
 
-    // 不变量：用户存款记录与总存款金额一致
+    // Invariant: Deposit records match total deposits
     function invariant_DepositRecordsMatchTotals() public view {
         address[] memory users = handler.getUsers();
-        uint256 maxUsersToCheck = 5; // 只检查前5个用户，减少计算量
+        uint256 maxUsersToCheck = 5; // Check only first 5 users, reduce calculation
 
         for (uint256 i = 0; i < users.length && i < maxUsersToCheck; i++) {
             address user = users[i];
@@ -75,7 +75,7 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
 
             (uint256 totalWbtc, uint256 totalUsdc, , ) = engine.getUserTotals(user);
 
-            // 如果用户没有存款，跳过检查
+            // If user has no deposits, skip check
             if (totalWbtc == 0 && totalUsdc == 0) continue;
 
             StrategyEngine.DepositRecord[] memory records = engine.getUserDepositRecords(user);
@@ -91,10 +91,10 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
                 }
             }
 
-            // 由于 withdraw 函数的实现问题，存款记录可能与总额不一致
-            // 我们只检查以下条件：
-            // 1. 如果总额为0，则不检查
-            // 2. 如果总额大于0，则检查存款记录总和不小于总额
+            // Due to the implementation issue of the withdraw function, the deposit records may not match the total amount
+            // We only check the following conditions:
+            // 1. If the total amount is 0, we do not check
+            // 2. If the total amount is greater than 0, we check that the sum of deposit records is greater than or equal to the total amount
             if (totalWbtc > 0) {
                 assertGe(sumWbtc, totalWbtc, "WBTC deposit records sum should be >= total");
             }
@@ -104,10 +104,10 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
         }
     }
 
-    // 不变量：用户位置映射一致性
+    // Invariant: User position mapping consistency
     function invariant_UserPositionMappingConsistency() public view {
         address[] memory users = handler.getUsers();
-        uint256 maxUsersToCheck = 5; // 只检查前5个用户，减少计算量
+        uint256 maxUsersToCheck = 5; // Check only first 5 users, reduce calculation
 
         for (uint256 i = 0; i < users.length && i < maxUsersToCheck; i++) {
             address user = users[i];
@@ -121,7 +121,7 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
         }
     }
 
-    // 不变量：批处理索引永远不会超过用户总数
+    // Invariant: Batch index never exceeds user count
     function invariant_BatchIndexNeverExceedsUserCount() public view {
         uint256 batchIndex = engine.currentBatchIndex();
         uint256 userCount = handler.getUserCount();
@@ -129,12 +129,12 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
         assertLe(batchIndex, userCount, "Batch index should never exceed user count");
     }
 
-    // 不变量：健康检查时间间隔
+    // Invariant: Health check time interval
     function invariant_HealthCheckTimeInterval() public view {
         uint256 lastCheck = engine.lastHealthCheckTimestamp();
 
         if (lastCheck > 0) {
-            // 如果已经执行过健康检查，确保时间间隔合理
+            // If health check has been performed, ensure the time interval is reasonable
             assertLe(
                 block.timestamp - lastCheck,
                 2 hours,
@@ -143,29 +143,29 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
         }
     }
 
-    // 不变量：vault中的平台费用永远不会减少
+    // Invariant: Platform fee in vault never decreases
     function invariant_VaultBalanceNeverDecreases() public {
         uint256 vaultBalance = IERC20(usdc).balanceOf(address(vault));
         uint256 lastVaultBalance = handler.getLastVaultBalance();
 
         assertGe(vaultBalance, lastVaultBalance, "Vault balance should never decrease");
 
-        // 更新最后记录的余额
+        // Update last recorded balance
         handler.updateLastVaultBalance();
     }
 
-    // 不变量：CpToken总供应量与用户获得的利润相关
+    // Invariant: CpToken total supply matches total user profit
     function invariant_CpTokenSupplyMatchesProfit() public view {
         uint256 totalSupply = cpToken.totalSupply();
         uint256 totalProfit = handler.getTotalProfit();
 
-        // CpToken总供应量应该等于用户获得的总利润
+        // CpToken total supply should match total user profit
         assertEq(totalSupply, totalProfit, "CpToken supply should match total user profit");
     }
 
-    // 不变量：平台费用百分比永远不会超过100%（移到最后执行）
+    // Invariant: Platform fee percentage never exceeds 100% (executed last)
     function invariant_PlatformFeeNeverExceeds100Percent() public view {
-        // 直接检查平台费用，这个调用应该很快
+        // Directly check platform fee, this call should be fast
         uint256 platformFee = engine.getPlatformFee();
         assertLe(platformFee, 10000, "Platform fee should never exceed 100%");
     }

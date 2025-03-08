@@ -13,6 +13,7 @@ contract CpToken is ERC20Upgradeable, UUPSUpgradeableBase {
     error CpToken__InvalidAmount();
     error CpToken__TransferNotAllowed();
 
+    // State variables
     MultiSig public multiSig;
 
     /// @custom:oz-upgrades-unsafe-allow constructor

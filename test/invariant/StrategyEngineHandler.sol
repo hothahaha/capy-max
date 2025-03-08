@@ -35,15 +35,15 @@ contract StrategyEngineHandler is Test {
         aaveOracle = _aaveOracle;
         deployer = _deployer;
 
-        // 初始化用户数组
+        // Initialize users array
         users = new address[](MAX_USERS);
 
-        // 授权引擎使用代币
+        // Authorize engine to use tokens
         IERC20(wbtc).approve(address(engine), type(uint256).max);
         IERC20(usdc).approve(address(engine), type(uint256).max);
     }
 
-    // 创建新用户
+    // Create new user
     function createUser(uint256 seed) public {
         uint256 index = seed % MAX_USERS;
         if (users[index] == address(0)) {
@@ -52,11 +52,11 @@ contract StrategyEngineHandler is Test {
             users[index] = user;
             userPrivateKeys[user] = privateKey;
 
-            // 给用户分配代币
+            // Assign tokens to user
             deal(wbtc, user, 10_000e8);
             deal(usdc, user, 10_000e6);
 
-            // 授权引擎使用代币
+            // Authorize engine to use tokens
             vm.startPrank(user);
             IERC20(wbtc).approve(address(engine), type(uint256).max);
             IERC20(usdc).approve(address(engine), type(uint256).max);
@@ -64,13 +64,13 @@ contract StrategyEngineHandler is Test {
         }
     }
 
-    // 存入WBTC
+    // Deposit WBTC
     function depositWbtc(uint256 userSeed, uint256 amount) public {
         uint256 index = userSeed % MAX_USERS;
         address user = users[index];
         if (user == address(0)) return;
 
-        // 约束金额在合理范围内
+        // Constraint amount in a reasonable range
         amount = bound(amount, 1, 1000e8);
 
         uint256 deadline = block.timestamp + 1 days;
@@ -100,13 +100,13 @@ contract StrategyEngineHandler is Test {
         {} catch {}
     }
 
-    // 存入USDC
+    // Deposit USDC
     function depositUsdc(uint256 userSeed, uint256 amount) public {
         uint256 index = userSeed % MAX_USERS;
         address user = users[index];
         if (user == address(0)) return;
 
-        // 约束金额在合理范围内，确保不超过用户余额
+        // Constraint amount in a reasonable range, ensuring it does not exceed user balance
         uint256 userBalance = IERC20(usdc).balanceOf(user);
         uint256 maxAmount = userBalance < 1000e6 ? userBalance : 1000e6;
         amount = bound(amount, 1, maxAmount);
@@ -117,15 +117,15 @@ contract StrategyEngineHandler is Test {
                 StrategyEngine.TokenType.USDC,
                 amount,
                 0, // referralCode
-                0, // deadline (不需要)
-                0, // v (不需要)
-                bytes32(0), // r (不需要)
-                bytes32(0) // s (不需要)
+                0, // deadline (not needed)
+                0, // v (not needed)
+                bytes32(0), // r (not needed)
+                bytes32(0) // s (not needed)
             )
         {} catch {}
     }
 
-    // 提取资金
+    // Withdraw funds
     function withdraw(uint256 userSeed, uint256 tokenTypeSeed, uint256 amount) public {
         uint256 index = userSeed % MAX_USERS;
         address user = users[index];
@@ -135,26 +135,26 @@ contract StrategyEngineHandler is Test {
             ? StrategyEngine.TokenType.WBTC
             : StrategyEngine.TokenType.USDC;
 
-        // 获取用户存款信息
+        // Get user deposit information
         (uint256 totalWbtc, uint256 totalUsdc, uint256 totalBorrows, ) = engine.getUserTotals(user);
 
-        // 确定可提取金额
+        // Determine the amount that can be withdrawn
         uint256 maxWithdraw;
         if (tokenType == StrategyEngine.TokenType.WBTC && totalWbtc > 0) {
-            // 模拟利润返回
-            uint256 profit = totalBorrows / 10; // 10% 利润
+            // Simulate profit return
+            uint256 profit = totalBorrows / 10; // 10% profit
             deal(usdc, address(engine), totalBorrows + profit);
             maxWithdraw = totalBorrows + profit;
         } else if (tokenType == StrategyEngine.TokenType.USDC && totalUsdc > 0) {
-            // 模拟利润返回
-            uint256 profit = totalUsdc / 10; // 10% 利润
+            // Simulate profit return
+            uint256 profit = totalUsdc / 10; // 10% profit
             deal(usdc, address(engine), totalUsdc + profit);
             maxWithdraw = totalUsdc + profit;
         } else {
-            return; // 没有可提取的资金
+            return; // No funds to withdraw
         }
 
-        // 约束提取金额，确保不超过最大可提取金额
+        // Constraint withdrawal amount, ensuring it does not exceed the maximum withdrawable amount
         if (maxWithdraw == 0) return;
         amount = bound(amount, 1, maxWithdraw);
 
@@ -163,21 +163,21 @@ contract StrategyEngineHandler is Test {
             uint256 userProfit,
             uint256 /* repayAaveAmount */
         ) {
-            // 记录总利润
+            // Record total profit
             totalProfit += userProfit;
         } catch {}
     }
 
-    // 更新借款能力
+    // Update borrow capacity
     function updateBorrowCapacity(uint256 userSeed, uint256 priceFactor) public {
         uint256 index = userSeed % MAX_USERS;
         address user = users[index];
         if (user == address(0)) return;
 
-        // 约束价格因子在合理范围内 (50% - 200%)
+        // Constraint price factor in a reasonable range (50% - 200%)
         priceFactor = bound(priceFactor, 50, 200);
 
-        // 模拟BTC价格变化
+        // Simulate BTC price change
         uint256 originalPrice = IAaveOracle(aaveOracle).getAssetPrice(wbtc);
         uint256 newPrice = (originalPrice * priceFactor) / 100;
 
@@ -189,7 +189,7 @@ contract StrategyEngineHandler is Test {
 
         try engine.updateBorrowCapacity(user) {} catch {}
 
-        // 恢复原始价格
+        // Restore original price
         vm.mockCall(
             aaveOracle,
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, wbtc),
@@ -197,24 +197,24 @@ contract StrategyEngineHandler is Test {
         );
     }
 
-    // 执行健康检查
+    // Perform health check
     function performHealthCheck() public {
-        // 前进时间1小时以确保可以执行健康检查
+        // Advance time 1 hour to ensure health check can be performed
         vm.warp(block.timestamp + 1 hours);
 
         try engine.performUpkeep("") {} catch {}
     }
 
-    // 更新平台费用
+    // Update platform fee
     function updatePlatformFee(uint256 newFee) public {
-        // 约束费用在有效范围内 (0-100%)
+        // Constraint fee in a valid range (0-100%)
         newFee = bound(newFee, 0, 10000);
 
         vm.prank(deployer);
         try engine.updatePlatformFee(newFee) {} catch {}
     }
 
-    // 辅助函数：生成有效的签名
+    // Helper function: Generate valid signature
     function _getPermitSignature(
         address token,
         address owner,
@@ -262,7 +262,7 @@ contract StrategyEngineHandler is Test {
         return totalProfit;
     }
 
-    // 辅助函数：打印用户信息，用于调试
+    // Helper function: Print user information, for debugging
     function printUserInfo(address user) public view {
         (
             uint256 totalWbtc,

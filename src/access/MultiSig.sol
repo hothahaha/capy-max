@@ -12,6 +12,7 @@ contract MultiSig is UUPSUpgradeableBase {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
+    // Errors
     error MultiSig__InvalidSignatureLength();
     error MultiSig__InvalidSignature();
     error MultiSig__InvalidNonce();
@@ -21,9 +22,11 @@ contract MultiSig is UUPSUpgradeableBase {
     error MultiSig__InsufficientSignatures();
     error MultiSig__DuplicateSignature();
 
+    // State variables
     SignerManager public signerManager;
     uint256 private _nonce;
 
+    // Constants
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256(
             "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
@@ -32,6 +35,7 @@ contract MultiSig is UUPSUpgradeableBase {
     bytes32 private constant TRANSACTION_TYPEHASH =
         keccak256("Transaction(address to,bytes data,uint256 nonce,uint256 deadline)");
 
+    // Events
     event TransactionExecuted(address indexed to, bytes data, uint256 nonce, uint256 deadline);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -170,10 +174,5 @@ contract MultiSig is UUPSUpgradeableBase {
 
     function getSignerManager() external view returns (SignerManager) {
         return signerManager;
-    }
-
-    /// @notice Get current implementation contract address
-    function implementation() external view returns (address) {
-        return ERC1967Utils.getImplementation();
     }
 }

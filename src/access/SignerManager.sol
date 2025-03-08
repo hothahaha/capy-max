@@ -7,6 +7,7 @@ import {MultiSig} from "./MultiSig.sol";
 import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 contract SignerManager is UUPSUpgradeableBase {
+    // Errors
     error SignerManager__InvalidSigner();
     error SignerManager__SignerAlreadyExists();
     error SignerManager__SignerDoesNotExist();
@@ -14,12 +15,14 @@ contract SignerManager is UUPSUpgradeableBase {
     error SignerManager__Unauthorized();
     error SignerManager__InvalidMultiSig();
 
+    // State variables
     MultiSig public multiSig;
     uint256 private threshold;
     mapping(address => bool) private signers;
     uint256 private signerCount;
     address[] private signerList;
 
+    // Events
     event SignerAdded(address indexed signer);
     event SignerRemoved(address indexed signer);
     event ThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
@@ -107,10 +110,5 @@ contract SignerManager is UUPSUpgradeableBase {
 
     function getSigners() external view returns (address[] memory) {
         return signerList;
-    }
-
-    /// @notice Get current implementation contract address
-    function implementation() external view returns (address) {
-        return ERC1967Utils.getImplementation();
     }
 }

@@ -49,7 +49,7 @@ contract StrategyEngineFuzzTest is Test {
 
         deployer = vm.addr(deployerKey);
 
-        // 使用 makeAddrAndKey 获取地址和对应的私钥
+        // Use makeAddrAndKey to get address and corresponding private key
         (user1, user1PrivateKey) = makeAddrAndKey("user1");
         (user2, user2PrivateKey) = makeAddrAndKey("user2");
         (user3, user3PrivateKey) = makeAddrAndKey("user3");
@@ -79,7 +79,7 @@ contract StrategyEngineFuzzTest is Test {
         vm.stopPrank();
     }
 
-    // 辅助函数：生成有效的签名
+    // Helper function: Generate valid signature
     function _getPermitSignature(
         address token,
         address owner,
@@ -104,7 +104,7 @@ contract StrategyEngineFuzzTest is Test {
         (v, r, s) = vm.sign(privateKey, digest);
     }
 
-    // 辅助函数：执行WBTC存款
+    // Helper function: Execute WBTC deposit
     function _depositWbtc(address user, uint256 amount, uint256 privateKey) internal {
         uint256 deadline = block.timestamp + 1 days;
         uint256 nonce = IERC20Permit(wbtc).nonces(user);
@@ -131,69 +131,69 @@ contract StrategyEngineFuzzTest is Test {
         );
     }
 
-    // 辅助函数：执行USDC存款
+    // Helper function: Execute USDC deposit
     function _depositUsdc(address user, uint256 amount) internal {
         vm.prank(user);
         engine.deposit(
             StrategyEngine.TokenType.USDC,
             amount,
             0, // referralCode
-            0, // deadline (不需要)
-            0, // v (不需要)
-            bytes32(0), // r (不需要)
-            bytes32(0) // s (不需要)
+            0, // deadline (not needed)
+            0, // v (not needed)
+            bytes32(0), // r (not needed)
+            bytes32(0) // s (not needed)
         );
     }
 
-    // 模糊测试：WBTC存款金额
+    // Fuzz test: WBTC deposit amount
     function testFuzz_WbtcDeposit(uint256 amount) public {
-        // 约束金额在合理范围内
+        // Constraint amount in a reasonable range
         amount = bound(amount, 1, INITIAL_BALANCE / 2);
 
-        // 执行存款
+        // Execute deposit
         _depositWbtc(user1, amount, user1PrivateKey);
 
-        // 验证存款结果
+        // Verify deposit result
         (uint256 totalWbtc, , uint256 totalBorrows, ) = engine.getUserTotals(user1);
         assertEq(totalWbtc, amount, "WBTC deposit amount incorrect");
         assertGt(totalBorrows, 0, "Should have borrowed USDC");
     }
 
-    // 模糊测试：USDC存款金额
+    // Fuzz test: USDC deposit amount
     function testFuzz_UsdcDeposit(uint256 amount) public {
-        // 约束金额在合理范围内
+        // Constraint amount in a reasonable range
         amount = bound(amount, 1, INITIAL_BALANCE / 2);
 
-        // 执行存款
+        // Execute deposit
         _depositUsdc(user2, amount);
 
-        // 验证存款结果
+        // Verify deposit result
         (, uint256 totalUsdc, uint256 totalBorrows, ) = engine.getUserTotals(user2);
         assertEq(totalUsdc, amount, "USDC deposit amount incorrect");
         assertEq(totalBorrows, 0, "Should not have borrowed for USDC deposit");
     }
 
-    // 模糊测试：多用户存款
+    // Fuzz test: Multiple users deposit
     function testFuzz_MultipleUsersDeposit(
         uint256 amount1,
         uint256 amount2,
         uint256 amount3
     ) public {
-        // 约束金额在合理范围内
+        // Constraint amount in a reasonable range
         amount1 = bound(amount1, 1, INITIAL_BALANCE / 4);
         amount2 = bound(amount2, 1, INITIAL_BALANCE / 4);
         amount3 = bound(amount3, 1, INITIAL_BALANCE / 4);
 
-        // 用户1存入WBTC
+        // User1 deposit WBTC
         _depositWbtc(user1, amount1, user1PrivateKey);
 
-        // 用户2存入USDC
+        // User2 deposit USDC
         _depositUsdc(user2, amount2);
 
-        // 用户3存入WBTC
+        // User3 deposit WBTC
         _depositWbtc(user3, amount3, user3PrivateKey);
 
-        // 验证所有用户的存款
+        // Verify all users' deposits
         (uint256 totalWbtc1, , , ) = engine.getUserTotals(user1);
         assertEq(totalWbtc1, amount1, "User1 WBTC deposit amount incorrect");
 
@@ -206,19 +206,19 @@ contract StrategyEngineFuzzTest is Test {
         assertGt(totalBorrows3, 0, "User3 should have borrowed USDC");
     }
 
-    // 模糊测试：存款和提款
+    // Fuzz test: Deposit and withdraw
     function testFuzz_DepositAndWithdraw(uint256 amount) public {
-        // 约束金额在合理范围内
+        // Constraint amount in a reasonable range
         amount = bound(amount, 1e6, INITIAL_BALANCE / 2);
 
-        // 用户存入USDC
+        // User1 deposit USDC
         _depositUsdc(user1, amount);
 
-        // 模拟利润返回
-        uint256 profit = amount / 10; // 10% 利润
+        // Simulate profit return
+        uint256 profit = amount / 10; // 10% profit
         deal(usdc, address(engine), amount + profit);
 
-        // 执行提款
+        // Execute withdraw
         vm.prank(user1);
         (uint256 userProfit, ) = engine.withdraw(
             StrategyEngine.TokenType.USDC,
@@ -226,11 +226,11 @@ contract StrategyEngineFuzzTest is Test {
             amount + profit
         );
 
-        // 验证提款结果
+        // Verify withdraw result
         assertGt(userProfit, 0, "User should receive profit");
         assertGt(cpToken.balanceOf(user1), 0, "User should receive reward tokens");
 
-        // 验证平台费用
+        // Verify platform fee
         uint256 platformFee = (profit * engine.getPlatformFee()) / 10000;
         assertGe(
             IERC20(usdc).balanceOf(address(vault)),
@@ -239,31 +239,31 @@ contract StrategyEngineFuzzTest is Test {
         );
     }
 
-    // 模糊测试：平台费用更新
+    // Fuzz test: Update platform fee
     function testFuzz_UpdatePlatformFee(uint256 newFee) public {
-        // 约束费用在有效范围内 (0-100%)
+        // Constraint fee in a valid range (0-100%)
         newFee = bound(newFee, 0, 10000);
 
-        // 更新平台费用
+        // Update platform fee
         vm.prank(deployer);
         engine.updatePlatformFee(newFee);
 
-        // 验证费用已更新
+        // Verify fee has been updated
         assertEq(engine.getPlatformFee(), newFee, "Platform fee should be updated");
     }
 
-    // 模糊测试：借款能力更新
+    // Fuzz Test: Update borrow capacity
     function testFuzz_UpdateBorrowCapacity(uint256 amount) public {
-        // 约束金额在合理范围内
+        // Constraint amount in a reasonable range
         amount = bound(amount, 1e8, INITIAL_BALANCE / 2);
 
-        // 用户存入WBTC
+        // User1 deposit WBTC
         _depositWbtc(user1, amount, user1PrivateKey);
 
-        // 获取初始借款金额
+        // Get initial borrow amount
         (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user1);
 
-        // 模拟BTC价格上涨50%
+        // Simulate BTC price increase by 50%
         uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
         vm.mockCall(
             address(engine.aaveOracle()),
@@ -271,11 +271,11 @@ contract StrategyEngineFuzzTest is Test {
             abi.encode((originalPrice * 3) / 2)
         );
 
-        // 更新借款能力
+        // Update borrow capacity
         vm.prank(deployer);
         engine.updateBorrowCapacity(user1);
 
-        // 验证借款能力已增加
+        // Verify borrow capacity has increased
         (, , uint256 newBorrowAmount, ) = engine.getUserTotals(user1);
         assertGt(
             newBorrowAmount,
