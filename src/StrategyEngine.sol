@@ -56,6 +56,12 @@ contract StrategyEngine is
         DepositRecord[] deposits;
     }
 
+    struct RepayState {
+        uint256 principal; // WBTC principal
+        uint256 profit; // USDC profit
+        bool hasRepaid; // has repaid
+    }
+
     // Constants
     uint256 private constant BASIS_POINTS = 10000; // 100%
     uint256 public constant BATCH_SIZE = 10;
@@ -82,6 +88,7 @@ contract StrategyEngine is
     mapping(address => address) public userToPosition;
     mapping(address => address) public positionToUser;
     mapping(address => uint256) public userIndices;
+    mapping(address => RepayState) public repayStates;
 
     // User array and batch processing
     address[] public allUsers;
@@ -236,6 +243,10 @@ contract StrategyEngine is
         return defaultLiquidationThreshold;
     }
 
+    function getUSDCBalance() external view returns (uint256) {
+        return usdc.balanceOf(address(this));
+    }
+
     function checkUpkeep(
         bytes calldata /* checkData */
     ) external view returns (bool upkeepNeeded, bytes memory /* performData */) {
@@ -348,21 +359,77 @@ contract StrategyEngine is
         UserInfo storage info = userInfo[user];
         if (repayAmount > info.totalBorrowAmount) revert StrategyEngine__InvalidRepayAmount();
 
-        // Execute repayment through user position
-        uint256 actualRepayAmount = _executeRepay(userPosition, repayAmount);
+        // calculate the amount to repay to Aave
+        uint256 aaveDebtAmount = _calculateRepayAmount(address(usdc), userPosition);
 
-        // Update user borrow info
-        info.totalBorrowAmount -= actualRepayAmount;
+        // if the repayment amount is enough to repay the Aave debt
+        if (repayAmount >= aaveDebtAmount) {
+            // execute the repayment
+            _executeRepay(userPosition, aaveDebtAmount);
+
+            // calculate the remaining USDC as profit
+            uint256 remainingUsdc = repayAmount - aaveDebtAmount;
+
+            // withdraw the WBTC principal from Aave
+            uint256 wbtcAmount = info.totalWbtcDeposited;
+            UserPosition(payable(userPosition)).executeAaveWithdraw(
+                address(aavePool),
+                address(wbtc),
+                wbtcAmount,
+                address(this)
+            );
+
+            // handle the profit
+            (uint256 userProfit, ) = _handleProfit(remainingUsdc, 0);
+
+            // update the repayState
+            repayStates[user] = RepayState({
+                principal: wbtcAmount,
+                profit: userProfit,
+                hasRepaid: true
+            });
+
+            // update the user info
+            info.totalWbtcDeposited = 0;
+            info.totalBorrowAmount = 0;
+        } else {
+            // normal repayment process
+            uint256 actualRepayAmount = _executeRepay(userPosition, repayAmount);
+            info.totalBorrowAmount -= actualRepayAmount;
+        }
 
         emit BorrowCapacityUpdated(
             user,
             info.totalWbtcDeposited,
-            info.totalBorrowAmount + actualRepayAmount,
+            info.totalBorrowAmount + repayAmount,
             info.totalBorrowAmount,
-            actualRepayAmount,
+            repayAmount,
             false,
             block.timestamp
         );
+    }
+
+    function withdrawByUser(address user) external nonReentrant {
+        RepayState storage state = repayStates[user];
+        if (!state.hasRepaid) revert StrategyEngine__NoDeposit();
+
+        uint256 principal = state.principal;
+        uint256 profit = state.profit;
+
+        // reset the state
+        state.principal = 0;
+        state.profit = 0;
+        state.hasRepaid = false;
+
+        // transfer the principal and profit
+        if (principal > 0) {
+            wbtc.safeTransfer(user, principal);
+        }
+        if (profit > 0) {
+            usdc.safeTransfer(user, profit);
+        }
+
+        emit Withdrawn(user, principal, profit);
     }
 
     function performUpkeep(bytes calldata /* performData */) external {
@@ -471,7 +538,7 @@ contract StrategyEngine is
 
         emit Deposited(depositId, msg.sender, TokenType.WBTC, amount, borrowAmount);
 
-        bridge(borrowAmount);
+        // bridge(borrowAmount);
     }
 
     function _handleUsdcDeposit(uint256 amount) internal {
@@ -485,7 +552,7 @@ contract StrategyEngine is
 
         emit Deposited(depositId, msg.sender, TokenType.USDC, amount, 0);
 
-        bridge(amount);
+        // bridge(amount);
     }
 
     function _updateUserInfo(
@@ -579,10 +646,10 @@ contract StrategyEngine is
         return positionAddress;
     }
 
-    function bridge(uint256 amount) internal {
+    /* function bridge(uint256 amount) internal {
         usdc.approve(address(tokenMessenger), amount);
         tokenMessenger.depositForBurn(amount, 5, solanaAddress, address(usdc));
-    }
+    } */
 
     function _updateBorrowCapacity(address user) internal nonReentrant {
         address userPosition = _getUserPosition(user, true);
@@ -603,7 +670,7 @@ contract StrategyEngine is
             _executeBorrow(userPosition, additionalBorrow);
 
             // Bridge additional borrow
-            bridge(additionalBorrow);
+            // bridge(additionalBorrow);
 
             // Update user info
             info.totalBorrowAmount = newBorrowAmount;
