@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {UUPSUpgradeableBase} from "../upgradeable/UUPSUpgradeableBase.sol";
-import {MultiSig} from "../access/MultiSig.sol";
 
 /// @title CpToken
 /// @notice Non-transferable token representing user's deposit position
@@ -12,9 +11,6 @@ contract CpToken is ERC20Upgradeable, UUPSUpgradeableBase {
     error CpToken__Unauthorized();
     error CpToken__InvalidAmount();
     error CpToken__TransferNotAllowed();
-
-    // State variables
-    MultiSig public multiSig;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -25,12 +21,11 @@ contract CpToken is ERC20Upgradeable, UUPSUpgradeableBase {
         address initialOwner,
         string memory name,
         string memory symbol,
-        address _multiSig
+        address _safeWallet
     ) external initializer {
         __UUPSUpgradeableBase_init(initialOwner);
         __ERC20_init(name, symbol);
-        multiSig = MultiSig(_multiSig);
-        transferUpgradeRights(address(multiSig));
+        transferUpgradeRights(_safeWallet);
     }
 
     /// @notice Mint tokens to a user

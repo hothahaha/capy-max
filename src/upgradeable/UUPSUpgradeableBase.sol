@@ -5,6 +5,9 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
+/// @title UUPSUpgradeableBase
+/// @notice Base contract for upgradeable contracts using UUPS pattern
+/// @dev Manages upgrade rights and authorization
 abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
     error UUPSUpgradeableBase__Unauthorized();
     error UUPSUpgradeableBase__InvalidImplementation();
@@ -19,13 +22,17 @@ abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
         _disableInitializers();
     }
 
+    /// @notice Initialize the upgradeable contract
+    /// @param initialOwner Address of the initial owner
     function __UUPSUpgradeableBase_init(address initialOwner) internal onlyInitializing {
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
         _upgradeRightsOwner = initialOwner;
     }
 
-    /// @notice Transfer upgrade rights
+    /// @notice Transfer upgrade rights to a new owner
+    /// @dev Internal method, only called during initialization or by admin functions
+    /// @param newOwner Address of the new owner
     function transferUpgradeRights(address newOwner) internal {
         if (newOwner == address(0)) {
             revert UUPSUpgradeableBase__InvalidUpgradeRightsOwner();
@@ -40,6 +47,7 @@ abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
     }
 
     /// @notice Get upgrade rights owner
+    /// @return Address of the current upgrade rights owner
     function upgradeRightsOwner() public view returns (address) {
         return _upgradeRightsOwner;
     }
@@ -50,6 +58,8 @@ abstract contract UUPSUpgradeableBase is UUPSUpgradeable, OwnableUpgradeable {
         return ERC1967Utils.getImplementation();
     }
 
+    /// @notice Authorize an upgrade to a new implementation
+    /// @param newImplementation Address of the new implementation
     function _authorizeUpgrade(address newImplementation) internal view override {
         // Check if new implementation contract address is zero address
         if (newImplementation == address(0)) {

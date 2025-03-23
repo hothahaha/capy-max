@@ -10,8 +10,6 @@ interface IStrategyEngine {
         address aaveProtocolDataProvider;
         address cpToken;
         address vault;
-        address multiSig;
-        address tokenMessenger;
-        bytes32 solanaAddress;
+        address safeWallet;
     }
 }

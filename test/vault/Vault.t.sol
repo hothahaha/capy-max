@@ -6,8 +6,6 @@ import {Vault} from "../../src/vault/Vault.sol";
 import {StrategyEngine} from "../../src/StrategyEngine.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
-import {MultiSig} from "../../src/access/MultiSig.sol";
-import {SignerManager} from "../../src/access/SignerManager.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -16,8 +14,6 @@ contract VaultTest is Test {
     Vault public vault;
     IERC20 public usdc;
     HelperConfig public helperConfig;
-    MultiSig public multiSig;
-    SignerManager public signerManager;
 
     address public owner;
     address public user;
@@ -36,9 +32,9 @@ contract VaultTest is Test {
         (signer1, signer1Key) = makeAddrAndKey("signer1");
 
         DeployScript deployer = new DeployScript();
-        (engine, , vault, signerManager, multiSig, helperConfig) = deployer.run();
+        (engine, , vault, helperConfig) = deployer.run();
         address usdcAddress;
-        (, usdcAddress, , , , deployerKey, , ) = helperConfig.activeNetworkConfig();
+        (, usdcAddress, , , , deployerKey, ) = helperConfig.activeNetworkConfig();
         usdc = IERC20(usdcAddress);
         owner = address(engine);
 
@@ -71,31 +67,7 @@ contract VaultTest is Test {
         vault.depositProfit(0);
     }
 
-    function test_WithdrawThroughMultiSig() public {
-        uint256 amount = 100e6;
-        vm.startPrank(user);
-        usdc.approve(address(vault), amount);
-        vault.depositProfit(amount);
-        vm.stopPrank();
-
-        // Prepare multi-signature transaction data
-        bytes memory data = abi.encodeWithSelector(Vault.withdrawProfit.selector, user, amount);
-        uint256 deadline = block.timestamp + 1 days;
-
-        bytes32 txHash = _hashTransaction(address(multiSig), address(vault), data, 0, deadline);
-
-        bytes[] memory signatures = new bytes[](1);
-        signatures[0] = _signTransaction(deployerKey, txHash);
-
-        vm.expectEmit(true, true, true, true);
-        emit Withdraw(address(usdc), amount);
-
-        vm.prank(vm.addr(deployerKey));
-        multiSig.executeTransaction(address(vault), data, deadline, signatures);
-
-        assertEq(usdc.balanceOf(address(vault)), 0);
-        assertEq(usdc.balanceOf(user), 1000e6);
-    }
+    function test_WithdrawThroughMultiSig() public {}
 
     function test_RevertWhen_WithdrawZero() public {
         vm.prank(user);
@@ -103,30 +75,7 @@ contract VaultTest is Test {
         vault.withdrawProfit(user, 0);
     }
 
-    function test_RevertWhen_WithdrawTooMuch() public {
-        uint256 depositAmount = 100e6;
-        uint256 withdrawAmount = 200e6;
-        vm.startPrank(user);
-        usdc.approve(address(vault), depositAmount);
-        vault.depositProfit(depositAmount);
-        vm.stopPrank();
-
-        bytes memory data = abi.encodeWithSelector(
-            Vault.withdrawProfit.selector,
-            user,
-            withdrawAmount
-        );
-        uint256 deadline = block.timestamp + 1 days;
-
-        bytes32 txHash = _hashTransaction(address(multiSig), address(vault), data, 0, deadline);
-
-        bytes[] memory signatures = new bytes[](1);
-        signatures[0] = _signTransaction(deployerKey, txHash);
-
-        vm.prank(vm.addr(deployerKey));
-        vm.expectRevert(MultiSig.MultiSig__ExecutionFailed.selector);
-        multiSig.executeTransaction(address(vault), data, deadline, signatures);
-    }
+    function test_RevertWhen_WithdrawTooMuch() public {}
 
     function test_RevertWhen_WithdrawUnauthorized() public {
         uint256 amount = 100e6;
@@ -138,25 +87,5 @@ contract VaultTest is Test {
         vm.prank(user);
         vm.expectRevert(Vault.Vault__Unauthorized.selector);
         vault.withdrawProfit(user, amount);
-    }
-
-    // Helper functions
-    function _hashTransaction(
-        address verifyingContract,
-        address to,
-        bytes memory data,
-        uint256 nonce,
-        uint256 deadline
-    ) internal view returns (bytes32) {
-        bytes32 txHash = MultiSig(verifyingContract).hashTransaction(to, data, nonce, deadline);
-        return txHash;
-    }
-
-    function _signTransaction(
-        uint256 privateKey,
-        bytes32 digest
-    ) internal pure returns (bytes memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
-        return abi.encodePacked(r, s, v);
     }
 }

@@ -25,7 +25,7 @@ contract CpTokenTest is Test {
         user = makeAddr("user");
 
         DeployScript deployer = new DeployScript();
-        (engine, cpToken, , , , helperConfig) = deployer.run();
+        (engine, cpToken, , helperConfig) = deployer.run();
         owner = address(engine);
     }
 
@@ -54,9 +54,7 @@ contract CpTokenTest is Test {
 
     function test_RevertWhen_MintUnauthorized() public {
         vm.prank(user);
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user)
-        );
+        vm.expectRevert(abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user));
         cpToken.mint(user, 100e18);
     }
 
@@ -82,9 +80,7 @@ contract CpTokenTest is Test {
 
     function test_RevertWhen_BurnUnauthorized() public {
         vm.prank(user);
-        vm.expectRevert(
-            abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user)
-        );
+        vm.expectRevert(abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user));
         cpToken.burn(user, 100e18);
     }
 

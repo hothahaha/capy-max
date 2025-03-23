@@ -7,17 +7,15 @@ import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC2
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {AaveV3Arbitrum} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
 
-import {IAavePool} from "../src/aave/interface/IAavePool.sol";
-import {IAaveOracle} from "../src/aave/interface/IAaveOracle.sol";
-import {IVariableDebtToken} from "../src/aave/interface/IVariableDebtToken.sol";
+import {IAavePool} from "../src/interfaces/aave/IAavePool.sol";
+import {IAaveOracle} from "../src/interfaces/aave/IAaveOracle.sol";
+import {IVariableDebtToken} from "../src/interfaces/aave/IVariableDebtToken.sol";
 import {StrategyEngine} from "../src/StrategyEngine.sol";
 import {UserPosition} from "../src/UserPosition.sol";
 import {DeployScript} from "../script/Deploy.s.sol";
 import {HelperConfig} from "../script/HelperConfig.s.sol";
 import {CpToken} from "../src/tokens/CpToken.sol";
 import {Vault} from "../src/vault/Vault.sol";
-import {SignerManager} from "../src/access/SignerManager.sol";
-import {MultiSig} from "../src/access/MultiSig.sol";
 
 contract StrategyEngineTest is Test {
     IAavePool public aavePool;
@@ -25,6 +23,7 @@ contract StrategyEngineTest is Test {
     address public wbtc;
     address public usdc;
     address public USER;
+    address public SAFE_WALLET;
     address public DEPLOYER;
     uint256 public USER_PRIVATE_KEY;
     uint256 public DEPLOYER_PRIVATE_KEY;
@@ -40,8 +39,6 @@ contract StrategyEngineTest is Test {
 
     CpToken public cpToken;
     Vault public vault;
-    SignerManager public signerManager;
-    MultiSig public multiSig;
     HelperConfig public helperConfig;
 
     address public user;
@@ -79,9 +76,9 @@ contract StrategyEngineTest is Test {
         (signer2, signer2Key) = makeAddrAndKey("signer2");
 
         DeployScript deployer = new DeployScript();
-        (engine, cpToken, vault, signerManager, multiSig, helperConfig) = deployer.run();
+        (engine, cpToken, vault, helperConfig) = deployer.run();
 
-        (wbtc, usdc, , , , DEPLOYER_PRIVATE_KEY, , ) = helperConfig.activeNetworkConfig();
+        (wbtc, usdc, , , , DEPLOYER_PRIVATE_KEY, SAFE_WALLET) = helperConfig.activeNetworkConfig();
 
         DEPLOYER = vm.addr(DEPLOYER_PRIVATE_KEY);
 
@@ -548,56 +545,9 @@ contract StrategyEngineTest is Test {
         );
     }
 
-    function test_UpdatePlatformFeeUseNewSigner() public {
-        uint256 newFee = 500; // 5%
-        uint256 deadline = block.timestamp + 1 days;
-
-        // Verify DEPLOYER is signer
-        assertTrue(signerManager.isSigner(DEPLOYER), "DEPLOYER should be initial signer");
-
-        // Use DEPLOYER as initial signer to add signer1
-        bytes memory addSigner1Data = abi.encodeWithSelector(
-            SignerManager.addSigner.selector,
-            signer1
-        );
-        bytes32 addSigner1TxHash = _hashTransaction(
-            address(multiSig),
-            address(signerManager),
-            addSigner1Data,
-            multiSig.nonce(),
-            deadline
-        );
-        bytes[] memory signatures = new bytes[](1);
-        signatures[0] = _signTransaction(DEPLOYER_PRIVATE_KEY, addSigner1TxHash);
-        vm.prank(DEPLOYER);
-        multiSig.executeTransaction(address(signerManager), addSigner1Data, deadline, signatures);
-
-        // Add signer2 through multiSig
-        bytes memory addSigner2Data = abi.encodeWithSelector(
-            SignerManager.addSigner.selector,
-            signer2
-        );
-        bytes32 addSigner2TxHash = _hashTransaction(
-            address(multiSig),
-            address(signerManager),
-            addSigner2Data,
-            multiSig.nonce(),
-            deadline
-        );
-        signatures[0] = _signTransaction(DEPLOYER_PRIVATE_KEY, addSigner2TxHash);
-        vm.prank(DEPLOYER);
-        multiSig.executeTransaction(address(signerManager), addSigner2Data, deadline, signatures);
-
-        // Execute multiSig transaction
-        vm.prank(signer1);
-        engine.updatePlatformFee(newFee);
-
-        assertEq(engine.getPlatformFee(), newFee, "Platform fee not updated correctly");
-    }
-
     function test_RevertWhen_UpdatePlatformFeeUnauthorized() public {
         vm.prank(user);
-        vm.expectRevert(StrategyEngine.StrategyEngine__Unauthorized.selector);
+        vm.expectRevert(StrategyEngine.StrategyEngine__NotSafeSigner.selector);
         engine.updatePlatformFee(500);
     }
 
@@ -795,24 +745,5 @@ contract StrategyEngineTest is Test {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
 
         (v, r, s) = vm.sign(privateKey, digest);
-    }
-
-    function _hashTransaction(
-        address verifyingContract,
-        address to,
-        bytes memory data,
-        uint256 nonce,
-        uint256 deadline
-    ) internal view returns (bytes32) {
-        bytes32 txHash = MultiSig(verifyingContract).hashTransaction(to, data, nonce, deadline);
-        return txHash;
-    }
-
-    function _signTransaction(
-        uint256 privateKey,
-        bytes32 digest
-    ) internal pure returns (bytes memory) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
-        return abi.encodePacked(r, s, v);
     }
 }

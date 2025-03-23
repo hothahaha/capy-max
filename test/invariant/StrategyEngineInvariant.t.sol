@@ -6,13 +6,11 @@ import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {StrategyEngine} from "../../src/StrategyEngine.sol";
 import {CpToken} from "../../src/tokens/CpToken.sol";
 import {Vault} from "../../src/vault/Vault.sol";
-import {MultiSig} from "../../src/access/MultiSig.sol";
-import {SignerManager} from "../../src/access/SignerManager.sol";
 import {UserPosition} from "../../src/UserPosition.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {IStrategyEngine} from "../../src/interfaces/IStrategyEngine.sol";
-import {IAaveOracle} from "../../src/aave/interface/IAaveOracle.sol";
+import {IAaveOracle} from "../../src/interfaces/aave/IAaveOracle.sol";
 import {StrategyEngineHandler} from "./StrategyEngineHandler.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -36,10 +34,10 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
     function setUp() public {
         // Deploy contracts
         DeployScript deployScript = new DeployScript();
-        (engine, cpToken, vault, , , helperConfig) = deployScript.run();
+        (engine, cpToken, vault, helperConfig) = deployScript.run();
 
         // Get configuration
-        (wbtc, usdc, , aaveOracle, , deployerKey, , ) = helperConfig.activeNetworkConfig();
+        (wbtc, usdc, , aaveOracle, , deployerKey, ) = helperConfig.activeNetworkConfig();
 
         deployer = vm.addr(deployerKey);
 

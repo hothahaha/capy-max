@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {UUPSUpgradeableBase} from "./upgradeable/UUPSUpgradeableBase.sol";
 
-import {IAavePool} from "./aave/interface/IAavePool.sol";
+import {IAavePool} from "./interfaces/aave/IAavePool.sol";
 
 contract UserPosition is UUPSUpgradeableBase {
     using SafeERC20 for IERC20;
@@ -29,12 +29,12 @@ contract UserPosition is UUPSUpgradeableBase {
         address initialOwner,
         address _strategy,
         address _user,
-        address _multiSig
+        address _safeWallet
     ) external initializer {
         __UUPSUpgradeableBase_init(initialOwner);
         strategy = _strategy;
         user = _user;
-        transferUpgradeRights(_multiSig);
+        transferUpgradeRights(_safeWallet);
     }
 
     modifier onlyStrategy() {
