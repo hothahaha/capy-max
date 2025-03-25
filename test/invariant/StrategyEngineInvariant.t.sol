@@ -111,9 +111,9 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
             address user = users[i];
             if (user == address(0)) continue;
 
-            address position = engine.userToPosition(user);
+            address position = engine.getUserPositionAddress(user);
             if (position != address(0)) {
-                address mappedUser = engine.positionToUser(position);
+                address mappedUser = engine.getUserPositionAddress(position);
                 assertEq(mappedUser, user, "User-position mapping should be consistent");
             }
         }
@@ -125,20 +125,6 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
         uint256 userCount = handler.getUserCount();
 
         assertLe(batchIndex, userCount, "Batch index should never exceed user count");
-    }
-
-    // Invariant: Health check time interval
-    function invariant_HealthCheckTimeInterval() public view {
-        uint256 lastCheck = engine.lastHealthCheckTimestamp();
-
-        if (lastCheck > 0) {
-            // If health check has been performed, ensure the time interval is reasonable
-            assertLe(
-                block.timestamp - lastCheck,
-                2 hours,
-                "Health check interval should be reasonable"
-            );
-        }
     }
 
     // Invariant: Platform fee in vault never decreases

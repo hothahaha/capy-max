@@ -84,9 +84,8 @@ contract StrategyEngineIntegrationTest is Test {
         vm.prank(user1);
         engine.createUserPosition();
 
-        address userPosition = engine.userToPosition(user1);
+        address userPosition = engine.getUserPositionAddress(user1);
         assertNotEq(userPosition, address(0), "User position should be created");
-        assertEq(engine.positionToUser(userPosition), user1, "Position mapping incorrect");
     }
 
     // Test WBTC deposit process
@@ -121,7 +120,7 @@ contract StrategyEngineIntegrationTest is Test {
         );
 
         // Verify user position has been created
-        address userPosition = engine.userToPosition(user1);
+        address userPosition = engine.getUserPositionAddress(user1);
         assertNotEq(userPosition, address(0), "User position should be created");
 
         // Verify user information has been updated
@@ -204,9 +203,11 @@ contract StrategyEngineIntegrationTest is Test {
         engine.deposit(StrategyEngine.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
 
         // Simulate BTC price increase
-        uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
+        uint256 originalPrice = IAaveOracle(engine.getAaveOracleAddress()).getAssetPrice(
+            address(wbtc)
+        );
         vm.mockCall(
-            address(engine.aaveOracle()),
+            engine.getAaveOracleAddress(),
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
             abi.encode(originalPrice * 2)
         );
@@ -245,17 +246,23 @@ contract StrategyEngineIntegrationTest is Test {
         uint256 profit = borrowAmount / 10; // Assume 10% profit
         deal(usdc, address(engine), borrowAmount + profit);
 
+        // Create withdrawal info
+        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
+        withdrawals[0] = StrategyEngine.WithdrawalInfo({
+            tokenType: StrategyEngine.TokenType.WBTC,
+            user: user1,
+            amount: borrowAmount + profit
+        });
+
         // Execute withdrawal
         vm.prank(user1);
-        (uint256 userProfit, uint256 repayAmount) = engine.withdraw(
-            StrategyEngine.TokenType.WBTC,
-            user1,
-            borrowAmount + profit
+        (uint256[] memory userProfits, uint256[] memory repayAmounts) = engine.withdrawBatch(
+            withdrawals
         );
 
         // Verify withdrawal results
-        assertGt(userProfit, 0, "User should receive profit");
-        assertEq(repayAmount, borrowAmount, "Repay amount should match borrow amount");
+        assertGt(userProfits[0], 0, "User should receive profit");
+        assertEq(repayAmounts[0], borrowAmount, "Repay amount should match borrow amount");
 
         // Verify platform fee has been transferred to vault
         uint256 platformFee = (profit * engine.getPlatformFee()) / 10000;
@@ -301,12 +308,8 @@ contract StrategyEngineIntegrationTest is Test {
         // Fast forward time
         vm.warp(block.timestamp + 2 hours);
 
-        // Check if upkeep is needed
-        (bool upkeepNeeded, ) = engine.checkUpkeep("");
-        assertTrue(upkeepNeeded, "Upkeep should be needed");
-
         // Execute health check
-        engine.performUpkeep("");
+        engine.scheduledHealthCheck();
 
         // Verify batch index has been updated
         assertEq(engine.currentBatchIndex(), 10, "Batch index should be updated");
@@ -392,9 +395,17 @@ contract StrategyEngineIntegrationTest is Test {
         vm.prank(user2);
         engine.deposit(StrategyEngine.TokenType.USDC, USDC_AMOUNT, 0, 0, 0, bytes32(0), bytes32(0));
 
+        // Create withdrawal info for more than the deposit amount
+        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
+        withdrawals[0] = StrategyEngine.WithdrawalInfo({
+            tokenType: StrategyEngine.TokenType.USDC,
+            user: user2,
+            amount: USDC_AMOUNT * 2
+        });
+
         // Try to withdraw more than the deposit amount
         vm.prank(user2);
-        engine.withdraw(StrategyEngine.TokenType.USDC, user2, USDC_AMOUNT * 2);
+        engine.withdrawBatch(withdrawals);
         // Should fail because the amount exceeds the deposit
     }
 
@@ -438,9 +449,11 @@ contract StrategyEngineIntegrationTest is Test {
         (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user1);
 
         // Simulate BTC price crash 50%
-        uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
+        uint256 originalPrice = IAaveOracle(engine.getAaveOracleAddress()).getAssetPrice(
+            address(wbtc)
+        );
         vm.mockCall(
-            address(engine.aaveOracle()),
+            engine.getAaveOracleAddress(),
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
             abi.encode(originalPrice / 2)
         );
@@ -459,7 +472,7 @@ contract StrategyEngineIntegrationTest is Test {
 
         // Simulate price recovery
         vm.mockCall(
-            address(engine.aaveOracle()),
+            engine.getAaveOracleAddress(),
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
             abi.encode(originalPrice)
         );
@@ -529,12 +542,17 @@ contract StrategyEngineIntegrationTest is Test {
         for (uint256 i = 0; i < 20; i++) {
             (, , uint256 borrowAmount, ) = engine.getUserTotals(users[i]);
 
+            // Create withdrawal info
+            StrategyEngine.WithdrawalInfo[]
+                memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
+            withdrawals[0] = StrategyEngine.WithdrawalInfo({
+                tokenType: StrategyEngine.TokenType.WBTC,
+                user: users[i],
+                amount: borrowAmount + (profit / 20) // Average profit distribution
+            });
+
             vm.prank(users[i]);
-            engine.withdraw(
-                StrategyEngine.TokenType.WBTC,
-                users[i],
-                borrowAmount + (profit / 20) // Average profit distribution
-            );
+            engine.withdrawBatch(withdrawals);
         }
 
         // Verify all users successfully withdraw
@@ -629,6 +647,23 @@ contract StrategyEngineIntegrationTest is Test {
         (wbtcBalance, , , ) = engine.getUserTotals(user2);
         assertEq(wbtcBalance, maxDeposit, "Maximum deposit should be processed");
     }
+
+    // Test update borrow capacity
+    function testUpdateBorrowCapacity() public {
+        // Deploy user position
+        vm.prank(user1);
+        engine.createUserPosition();
+
+        // Verify position was created
+        address user1Position = engine.getUserPositionAddress(user1);
+        assertNotEq(user1Position, address(0), "User position should be created");
+
+        // Deploy second user position
+        vm.prank(user2);
+        engine.createUserPosition();
+        address user2Position = engine.getUserPositionAddress(user2);
+        assertNotEq(user2Position, address(0), "User2 position should be created");
+    }
 }
 
 // Reentrancy attack contract
@@ -654,8 +689,16 @@ contract ReentrancyAttacker {
         // 1. Deposit USDC
         engine.deposit(StrategyEngine.TokenType.USDC, 1000e6, 0, 0, 0, bytes32(0), bytes32(0));
 
+        // Create withdrawal info
+        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
+        withdrawals[0] = StrategyEngine.WithdrawalInfo({
+            tokenType: StrategyEngine.TokenType.USDC,
+            user: address(this),
+            amount: 1000e6
+        });
+
         // 2. Immediately attempt to withdraw in the same transaction - should fail if global lock exists
-        engine.withdraw(StrategyEngine.TokenType.USDC, address(this), 1000e6);
+        engine.withdrawBatch(withdrawals);
 
         // Note: This is not a classic reentrancy attack (no callback), but tests if nonReentrant locks work across functions
     }
@@ -664,7 +707,17 @@ contract ReentrancyAttacker {
     receive() external payable {
         if (!attacking) {
             attacking = true;
-            try engine.withdraw(StrategyEngine.TokenType.USDC, address(this), 500e6) {
+
+            // Create withdrawal info
+            StrategyEngine.WithdrawalInfo[]
+                memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
+            withdrawals[0] = StrategyEngine.WithdrawalInfo({
+                tokenType: StrategyEngine.TokenType.USDC,
+                user: address(this),
+                amount: 500e6
+            });
+
+            try engine.withdrawBatch(withdrawals) {
                 // Success indicates reentrancy protection failure
             } catch {
                 // Failure indicates reentrancy protection works

@@ -65,7 +65,7 @@ contract Vault is Initializable, UUPSUpgradeableBase {
 
     /// @notice Get the current token balance of the vault
     /// @return Current token balance
-    function getBalance() external view returns (uint256) {
+    function getBalance() external view virtual returns (uint256) {
         return token.balanceOf(address(this));
     }
 }

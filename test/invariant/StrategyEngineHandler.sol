@@ -158,13 +158,23 @@ contract StrategyEngineHandler is Test {
         if (maxWithdraw == 0) return;
         amount = bound(amount, 1, maxWithdraw);
 
+        // Create withdrawal info array
+        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
+        withdrawals[0] = StrategyEngine.WithdrawalInfo({
+            tokenType: tokenType,
+            user: user,
+            amount: amount
+        });
+
         vm.prank(user);
-        try engine.withdraw(tokenType, user, amount) returns (
-            uint256 userProfit,
-            uint256 /* repayAaveAmount */
+        try engine.withdrawBatch(withdrawals) returns (
+            uint256[] memory userProfits,
+            uint256[] memory /* repayAmounts */
         ) {
             // Record total profit
-            totalProfit += userProfit;
+            if (userProfits.length > 0) {
+                totalProfit += userProfits[0];
+            }
         } catch {}
     }
 
@@ -195,14 +205,6 @@ contract StrategyEngineHandler is Test {
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, wbtc),
             abi.encode(originalPrice)
         );
-    }
-
-    // Perform health check
-    function performHealthCheck() public {
-        // Advance time 1 hour to ensure health check can be performed
-        vm.warp(block.timestamp + 1 hours);
-
-        try engine.performUpkeep("") {} catch {}
     }
 
     // Update platform fee
@@ -255,7 +257,7 @@ contract StrategyEngineHandler is Test {
     }
 
     function updateLastVaultBalance() public {
-        lastVaultBalance = IERC20(usdc).balanceOf(address(engine.vault()));
+        lastVaultBalance = IERC20(usdc).balanceOf(engine.getVaultAddress());
     }
 
     function getTotalProfit() public view returns (uint256) {

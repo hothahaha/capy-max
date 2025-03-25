@@ -216,16 +216,20 @@ contract StrategyEngineFuzzTest is Test {
         uint256 profit = amount / 10; // 10% profit
         deal(usdc, address(engine), amount + profit);
 
+        // Create withdrawal info
+        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
+        withdrawals[0] = StrategyEngine.WithdrawalInfo({
+            tokenType: StrategyEngine.TokenType.USDC,
+            user: user1,
+            amount: amount + profit
+        });
+
         // Execute withdraw
         vm.prank(user1);
-        (uint256 userProfit, ) = engine.withdraw(
-            StrategyEngine.TokenType.USDC,
-            user1,
-            amount + profit
-        );
+        (uint256[] memory userProfits, ) = engine.withdrawBatch(withdrawals);
 
         // Verify withdraw result
-        assertGt(userProfit, 0, "User should receive profit");
+        assertGt(userProfits[0], 0, "User should receive profit");
         assertGt(cpToken.balanceOf(user1), 0, "User should receive reward tokens");
 
         // Verify platform fee
@@ -262,9 +266,11 @@ contract StrategyEngineFuzzTest is Test {
         (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user1);
 
         // Simulate BTC price increase by 50%
-        uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
+        uint256 originalPrice = IAaveOracle(engine.getAaveOracleAddress()).getAssetPrice(
+            address(wbtc)
+        );
         vm.mockCall(
-            address(engine.aaveOracle()),
+            engine.getAaveOracleAddress(),
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
             abi.encode((originalPrice * 3) / 2)
         );
@@ -280,5 +286,85 @@ contract StrategyEngineFuzzTest is Test {
             initialBorrowAmount,
             "Borrow capacity should increase after price increase"
         );
+    }
+
+    // Test that the _createUserPosition function generates unique addresses for different users
+    function testFuzz_CreateUserPositionUniqueness(bytes32 seed1, bytes32 seed2) public {
+        // Generate random addresses from seeds to ensure uniqueness
+        address randomUser1 = address(uint160(uint256(keccak256(abi.encodePacked(seed1)))));
+        address randomUser2 = address(uint160(uint256(keccak256(abi.encodePacked(seed2)))));
+
+        // If addresses are the same, skip test
+        if (randomUser1 == randomUser2) return;
+
+        // Create positions for both users
+        vm.prank(randomUser1);
+        engine.createUserPosition();
+
+        vm.prank(randomUser2);
+        engine.createUserPosition();
+
+        // Get position addresses
+        address position1 = engine.getUserPositionAddress(randomUser1);
+        address position2 = engine.getUserPositionAddress(randomUser2);
+
+        // Verify positions are unique
+        assertNotEq(position1, address(0), "Position 1 should be created");
+        assertNotEq(position2, address(0), "Position 2 should be created");
+        assertNotEq(position1, position2, "Positions should be different for different users");
+    }
+
+    // Test to create many user positions in sequence and verify they're all unique
+    function testFuzz_CreateMultipleUserPositionsUniqueness(uint256 numUsers) public {
+        // Limit number of users to test (up to 20)
+        numUsers = bound(numUsers, 3, 20);
+
+        // Create array to store all users and their positions
+        address[] memory users = new address[](numUsers);
+        address[] memory positions = new address[](numUsers);
+
+        // Create random users and positions
+        for (uint256 i = 0; i < numUsers; i++) {
+            // Create random user address
+            users[i] = address(uint160(uint256(keccak256(abi.encodePacked(i, block.timestamp)))));
+
+            // Create position for user
+            vm.prank(users[i]);
+            engine.createUserPosition();
+
+            // Get position address
+            positions[i] = engine.getUserPositionAddress(users[i]);
+
+            // Verify position was created
+            assertNotEq(positions[i], address(0), "Position should be created");
+
+            // Check uniqueness against all previously created positions
+            for (uint256 j = 0; j < i; j++) {
+                assertNotEq(
+                    positions[i],
+                    positions[j],
+                    "Positions should be different for different users"
+                );
+            }
+        }
+    }
+
+    // Test creating user position with same address multiple times
+    function testFuzz_CreatePositionIdempotency() public {
+        // Create position
+        vm.prank(user1);
+        engine.createUserPosition();
+
+        // Get position address
+        address position1 = engine.getUserPositionAddress(user1);
+
+        // Try to create position again
+        vm.expectRevert(StrategyEngine.StrategyEngine__PositionAlreadyExists.selector);
+        vm.prank(user1);
+        engine.createUserPosition();
+
+        // Verify position address hasn't changed
+        address position2 = engine.getUserPositionAddress(user1);
+        assertEq(position1, position2, "Position address should not change on repeated creation");
     }
 }
