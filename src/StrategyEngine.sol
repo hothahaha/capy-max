@@ -51,6 +51,7 @@ contract StrategyEngine is
         uint256 amount;
         uint256 timestamp;
         uint256 borrowAmount;
+        bool isWithdrawn; // 是否已取款
     }
 
     struct UserInfo {
@@ -83,8 +84,8 @@ contract StrategyEngine is
     //--------------------------------------------------------------------------
 
     // Constants
-    uint256 private constant BASIS_POINTS = 10000; // 100%
-    uint256 public constant BATCH_SIZE = 10;
+    uint256 private immutable BASIS_POINTS = 10000; // 100%
+    uint256 public immutable BATCH_SIZE = 10;
 
     // Core state variables
     uint256 private platformFeePercentage;
@@ -93,25 +94,37 @@ contract StrategyEngine is
     address private safeWallet;
 
     // Token and protocol contracts
-    IERC20 private wbtc;
-    IERC20 private usdc;
-    IAavePool private aavePool;
-    IAaveOracle private aaveOracle;
-    IPoolDataProvider private aaveProtocolDataProvider;
+    IERC20 public wbtc;
+    IERC20 public usdc;
+    IAavePool public aavePool;
+    IAaveOracle public aaveOracle;
+    IPoolDataProvider public aaveProtocolDataProvider;
     CpToken public cpToken;
-    Vault private vault;
+    Vault public vault;
+
+    // Combined user state
+    struct UserState {
+        UserInfo info;
+        RepayState repayState;
+        address position;
+    }
 
     // User data mappings
-    mapping(address => UserInfo) public userInfo;
-    mapping(address => address) private userToPosition;
-    mapping(address => address) private positionToUser;
+    mapping(address => UserState) private userStates;
     mapping(address => uint256) private userIndices;
-    mapping(address => RepayState) private repayStates;
 
     // User array and batch processing
     address[] private allUsers;
     uint256 private lastHealthCheckTimestamp;
     uint256 public currentBatchIndex;
+
+    // Simplified events
+    event BorrowCapacityUpdated(
+        address indexed user,
+        uint256 originalAmount,
+        uint256 newAmount,
+        bool isIncrease
+    );
 
     //--------------------------------------------------------------------------
     // Events
@@ -160,6 +173,9 @@ contract StrategyEngine is
     error StrategyEngine__InvalidRepayAmount();
     error StrategyEngine__NotSafeSigner();
     error StrategyEngine__InsufficientContractBalance();
+    error StrategyEngine__InvalidInput();
+    error StrategyEngine__InsufficientAmount();
+    error StrategyEngine__WithdrawalNeedRepayAmountLess();
 
     //--------------------------------------------------------------------------
     // Modifiers
@@ -239,22 +255,24 @@ contract StrategyEngine is
 
     /**
      * @notice Batch withdraw function to process multiple withdrawals at once
-     * @param withdrawals Array of withdrawal information containing token type, user, and amount
+     * @param users Array of user addresses
+     * @param amounts Array of withdrawal amounts
      * @return profits Array of user profits for each withdrawal
-     * @return repayAmounts Array of repay amounts for each withdrawal
      */
     function withdrawBatch(
-        WithdrawalInfo[] calldata withdrawals
-    ) external nonReentrant returns (uint256[] memory profits, uint256[] memory repayAmounts) {
-        uint256 length = withdrawals.length;
+        address[] calldata users,
+        uint256[] calldata amounts
+    ) external nonReentrant onlySafeSigner returns (uint256[] memory profits) {
+        uint256 length = users.length;
+        if (length != amounts.length) revert StrategyEngine__InvalidInput();
+
         profits = new uint256[](length);
-        repayAmounts = new uint256[](length);
 
         // Calculate total withdrawal amount to check against contract balance
         uint256 totalWithdrawalAmount = 0;
         for (uint256 i = 0; i < length; i++) {
-            if (withdrawals[i].amount == 0) revert StrategyEngine__InvalidAmount();
-            totalWithdrawalAmount += withdrawals[i].amount;
+            if (amounts[i] == 0) revert StrategyEngine__InvalidAmount();
+            totalWithdrawalAmount += amounts[i];
         }
 
         // Check if contract has enough balance for all withdrawals
@@ -264,11 +282,10 @@ contract StrategyEngine is
 
         // Process each withdrawal
         for (uint256 i = 0; i < length; i++) {
-            WithdrawalInfo calldata info = withdrawals[i];
-            (profits[i], repayAmounts[i]) = _withdraw(info.tokenType, info.user, info.amount);
+            profits[i] = _withdraw(users[i], amounts[i]);
         }
 
-        return (profits, repayAmounts);
+        return profits;
     }
 
     /**
@@ -297,7 +314,7 @@ contract StrategyEngine is
      */
     function repayBorrowBatch(
         RepayInfo[] calldata repayInfos
-    ) external nonReentrant returns (uint256[] memory actualRepayAmounts) {
+    ) external nonReentrant onlySafeSigner returns (uint256[] memory actualRepayAmounts) {
         uint256 length = repayInfos.length;
         actualRepayAmounts = new uint256[](length);
 
@@ -323,8 +340,8 @@ contract StrategyEngine is
 
         address userPosition = _getUserPosition(user, true);
 
-        UserInfo storage info = userInfo[user];
-        if (repayAmount > info.totalBorrowAmount) revert StrategyEngine__InvalidRepayAmount();
+        UserState storage state = userStates[user];
+        if (repayAmount > state.info.totalBorrowAmount) revert StrategyEngine__InvalidRepayAmount();
 
         // calculate the amount to repay to Aave
         uint256 aaveDebtAmount = _calculateRepayAmount(address(usdc), userPosition);
@@ -341,7 +358,7 @@ contract StrategyEngine is
             uint256 remainingUsdc = repayAmount - aaveDebtAmount;
 
             // withdraw the WBTC principal from Aave
-            uint256 wbtcAmount = info.totalWbtcDeposited;
+            uint256 wbtcAmount = state.info.totalWbtcDeposited;
             UserPosition(payable(userPosition)).executeAaveWithdraw(
                 address(aavePool),
                 address(wbtc),
@@ -350,29 +367,29 @@ contract StrategyEngine is
             );
 
             // handle the profit
-            (uint256 userProfit, ) = _handleProfit(remainingUsdc, 0);
+            uint256 userProfit = _handleProfit(remainingUsdc);
 
             // update the repayState
-            repayStates[user] = RepayState({
+            state.repayState = RepayState({
                 principal: wbtcAmount,
                 profit: userProfit,
                 hasRepaid: true
             });
 
             // update the user info
-            info.totalWbtcDeposited = 0;
-            info.totalBorrowAmount = 0;
+            state.info.totalWbtcDeposited = 0;
+            state.info.totalBorrowAmount = 0;
         } else {
             // normal repayment process
             actualRepayAmount = _executeRepay(userPosition, repayAmount);
-            info.totalBorrowAmount -= actualRepayAmount;
+            state.info.totalBorrowAmount -= actualRepayAmount;
         }
 
         emit BorrowCapacityUpdated(
             user,
-            info.totalWbtcDeposited,
-            info.totalBorrowAmount + actualRepayAmount,
-            info.totalBorrowAmount,
+            state.info.totalWbtcDeposited,
+            state.info.totalBorrowAmount + actualRepayAmount,
+            state.info.totalBorrowAmount,
             actualRepayAmount,
             false,
             block.timestamp
@@ -382,21 +399,10 @@ contract StrategyEngine is
     }
 
     /**
-     * @notice Repay borrowed amount
-     * @dev This function is kept for backward compatibility. Use repayBorrowBatch for new implementations
-     */
-    function repayBorrow(
-        address user,
-        uint256 repayAmount
-    ) external nonReentrant returns (uint256) {
-        return _repayBorrow(user, repayAmount);
-    }
-
-    /**
      * @notice Withdraw funds for a user
      */
     function withdrawByUser(address user) external nonReentrant {
-        RepayState storage state = repayStates[user];
+        RepayState storage state = userStates[user].repayState;
         if (!state.hasRepaid) revert StrategyEngine__NoDeposit();
 
         uint256 principal = state.principal;
@@ -426,14 +432,14 @@ contract StrategyEngine is
     }
 
     /**
-     * @notice Generate a deposit ID using parameters
+     * @notice Generate a deposit ID
      */
-    function generateDepositId(
+    function _generateDepositId(
         address user,
         TokenType tokenType,
         uint256 amount,
         uint256 timestamp
-    ) external pure returns (bytes32) {
+    ) internal pure returns (bytes32) {
         return
             StrategyLib.generateDepositId(
                 user,
@@ -447,30 +453,14 @@ contract StrategyEngine is
      * @notice Calculate borrow amount for a user
      */
     function calculateBorrowAmount(address user) external view returns (uint256) {
-        (
-            uint256 totalCollateralBase,
-            ,
-            ,
-            uint256 currentLiquidationThreshold,
-            ,
-
-        ) = _getUserAccountData(user);
-
-        return
-            StrategyLib.calculateBorrowAmount(
-                aaveOracle,
-                address(usdc),
-                totalCollateralBase,
-                currentLiquidationThreshold,
-                defaultLiquidationThreshold
-            );
+        return _calculateBorrowAmount(user);
     }
 
     /**
      * @notice Get user deposit records
      */
     function getUserDepositRecords(address user) external view returns (DepositRecord[] memory) {
-        return userInfo[user].deposits;
+        return userStates[user].info.deposits;
     }
 
     /**
@@ -488,12 +478,12 @@ contract StrategyEngine is
             uint256 lastDepositTime
         )
     {
-        UserInfo storage info = userInfo[user];
+        UserState storage state = userStates[user];
         return (
-            info.totalWbtcDeposited,
-            info.totalUsdcDeposited,
-            info.totalBorrowAmount,
-            info.lastDepositTime
+            state.info.totalWbtcDeposited,
+            state.info.totalUsdcDeposited,
+            state.info.totalBorrowAmount,
+            state.info.lastDepositTime
         );
     }
 
@@ -557,28 +547,7 @@ contract StrategyEngine is
      * @notice Get user position address
      */
     function getUserPositionAddress(address user) external view returns (address) {
-        return userToPosition[user];
-    }
-
-    /**
-     * @notice Withdraw funds for a specific token type and amount
-     * @dev This function is kept for backward compatibility. Use withdrawBatch for new implementations
-     * @param tokenType Type of token to withdraw (WBTC or USDC)
-     * @param amount Amount to withdraw
-     * @return userProfit Profit earned by the user
-     * @return repayAmount Amount repaid to Aave
-     */
-    function withdraw(
-        TokenType tokenType,
-        uint256 amount
-    ) external nonReentrant returns (uint256 userProfit, uint256 repayAmount) {
-        if (amount == 0) revert StrategyEngine__InvalidAmount();
-
-        // Check if contract has enough balance
-        uint256 engineBalance = usdc.balanceOf(address(this));
-        if (engineBalance < amount) revert StrategyEngine__InsufficientContractBalance();
-
-        return _withdraw(tokenType, msg.sender, amount);
+        return userStates[user].position;
     }
 
     //--------------------------------------------------------------------------
@@ -594,7 +563,7 @@ contract StrategyEngine is
         // Process users in current batch
         for (uint256 i = currentBatchIndex; i < endIndex; i++) {
             address user = allUsers[i];
-            if (userToPosition[user] != address(0)) {
+            if (userStates[user].position != address(0)) {
                 _updateBorrowCapacity(user);
             }
         }
@@ -624,7 +593,7 @@ contract StrategyEngine is
             uint256 healthFactor
         )
     {
-        address userPosition = userToPosition[user];
+        address userPosition = userStates[user].position;
         return _getUserAccountData(userPosition);
     }
 
@@ -661,79 +630,87 @@ contract StrategyEngine is
 
     /**
      * @notice Internal function to process a single withdrawal
-     * @param tokenType Type of token to withdraw (WBTC or USDC)
      * @param user Address of the user
-     * @param amount Amount to withdraw
+     * @param amount Amount to withdraw in USDC
      * @return userProfit Profit earned by the user
-     * @return repayAaveAmount Amount repaid to Aave
      */
-    function _withdraw(
-        TokenType tokenType,
-        address user,
-        uint256 amount
-    ) internal returns (uint256 userProfit, uint256 repayAaveAmount) {
-        UserInfo storage info = userInfo[user];
-        uint256 profit;
-        uint256 withdrawUSDCAmount;
+    function _withdraw(address user, uint256 amount) internal returns (uint256 userProfit) {
+        UserState storage state = userStates[user];
+        if (state.info.deposits.length == 0) revert StrategyEngine__NoDeposit();
 
-        if (tokenType == TokenType.WBTC) {
-            address userPosition = _getUserPosition(user, false);
+        // get total wbtc, usdc and borrow amount
+        (
+            uint256 totalWbtcAmount,
+            uint256 totalUsdcAmount,
+            uint256 totalBorrowAmount
+        ) = _calculateWithdrawalAmounts(state.info);
 
-            // Repay Aave loan
-            uint256 repayAmount = StrategyLib.calculateRepayAmount(
-                address(usdc),
-                userPosition,
-                aaveProtocolDataProvider
-            );
-            repayAaveAmount = _executeRepay(userPosition, amount);
-
-            if (amount >= repayAmount) {
-                // Calculate profit
-                profit = amount - repayAmount;
-
-                // Transfer remaining USDC to engine
-                StrategyLib.transferUsdc(usdc, userPosition, address(this), profit);
-
-                uint256 wbtcAmount = info.totalWbtcDeposited;
-
-                // Retrieve collateral
-                UserPosition(payable(userPosition)).executeAaveWithdraw(
-                    address(aavePool),
-                    address(wbtc),
-                    wbtcAmount,
-                    user
-                );
-
-                // Update user information
-                info.totalWbtcDeposited = 0;
-                info.totalBorrowAmount = 0;
-            } else {
-                info.totalBorrowAmount -= amount;
-                return (0, repayAaveAmount);
-            }
-        } else {
-            // Calculate profit
-            profit = amount - info.totalUsdcDeposited;
-
-            withdrawUSDCAmount = info.totalUsdcDeposited;
-
-            // Update user information
-            info.totalUsdcDeposited = 0;
+        if (totalWbtcAmount == 0 && totalUsdcAmount == 0) {
+            revert StrategyEngine__NoDeposit();
         }
 
-        (userProfit, ) = StrategyLib.handleProfit(
-            profit,
-            withdrawUSDCAmount,
-            platformFeePercentage,
+        // ensure the amount is enough to handle all withdrawals
+        if (amount < totalBorrowAmount + totalUsdcAmount) {
+            revert StrategyEngine__InsufficientAmount();
+        }
+
+        // handle wbtc deposit and aave repayment
+        (uint256 amountUsdcAfterRepay, ) = StrategyLib.handleWbtcWithdrawal(
             usdc,
-            address(vault),
-            ICpToken(address(cpToken)),
-            user
+            wbtc,
+            user,
+            amount,
+            totalWbtcAmount,
+            state.position,
+            aaveProtocolDataProvider,
+            aavePool
         );
 
-        emit Withdrawn(user, amount, profit);
+        // handle usdc deposit and calculate profit
+        userProfit = StrategyLib.handleUsdcWithdrawalAndProfit(
+            usdc,
+            user,
+            amountUsdcAfterRepay,
+            totalUsdcAmount,
+            platformFeePercentage,
+            address(vault),
+            ICpToken(address(cpToken))
+        );
 
-        return (userProfit, repayAaveAmount);
+        // mark all deposits as withdrawn
+        _markDepositsAsWithdrawn(state.info);
+
+        // Update state
+        state.info.totalWbtcDeposited = 0;
+        state.info.totalUsdcDeposited = 0;
+        state.info.totalBorrowAmount = 0;
+
+        emit Withdrawn(user, amount, userProfit);
+        return userProfit;
+    }
+
+    /**
+     * @notice Calculate total withdrawal amounts for a user
+     */
+    function _calculateWithdrawalAmounts(
+        UserInfo storage info
+    )
+        internal
+        view
+        returns (uint256 totalWbtcAmount, uint256 totalUsdcAmount, uint256 totalBorrowAmount)
+    {
+        for (uint256 i = 0; i < info.deposits.length; i++) {
+            DepositRecord storage userDeposit = info.deposits[i];
+            if (!userDeposit.isWithdrawn) {
+                if (userDeposit.tokenType == TokenType.WBTC) {
+                    totalWbtcAmount += userDeposit.amount;
+                    totalBorrowAmount += userDeposit.borrowAmount;
+                } else {
+                    totalUsdcAmount += userDeposit.amount;
+                }
+            }
+        }
+        return (totalWbtcAmount, totalUsdcAmount, totalBorrowAmount);
     }
 
     /**
@@ -743,27 +720,12 @@ contract StrategyEngine is
         address userPosition = _getUserPosition(user, true);
 
         // Get user's current info
-        UserInfo storage info = userInfo[user];
-        uint256 currentWbtc = info.totalWbtcDeposited;
-        uint256 currentBorrowAmount = info.totalBorrowAmount;
+        UserState storage state = userStates[user];
+        uint256 currentWbtc = state.info.totalWbtcDeposited;
+        uint256 currentBorrowAmount = state.info.totalBorrowAmount;
 
         // Calculate new borrow capacity
-        (
-            uint256 totalCollateralBase,
-            ,
-            ,
-            uint256 currentLiquidationThreshold,
-            ,
-
-        ) = _getUserAccountData(userPosition);
-
-        uint256 newBorrowAmount = StrategyLib.calculateBorrowAmount(
-            aaveOracle,
-            address(usdc),
-            totalCollateralBase,
-            currentLiquidationThreshold,
-            defaultLiquidationThreshold
-        );
+        uint256 newBorrowAmount = _calculateBorrowAmount(userPosition);
 
         if (newBorrowAmount > currentBorrowAmount) {
             // Can borrow more
@@ -773,7 +735,7 @@ contract StrategyEngine is
             _executeBorrow(userPosition, additionalBorrow);
 
             // Update user info
-            info.totalBorrowAmount = newBorrowAmount;
+            state.info.totalBorrowAmount = newBorrowAmount;
 
             emit BorrowCapacityUpdated(
                 user,
@@ -801,24 +763,6 @@ contract StrategyEngine is
     }
 
     /**
-     * @notice Generate a deposit ID
-     */
-    function _generateDepositId(
-        address user,
-        TokenType tokenType,
-        uint256 amount,
-        uint256 timestamp
-    ) internal pure returns (bytes32) {
-        return
-            StrategyLib.generateDepositId(
-                user,
-                StrategyLib.TokenType(uint(tokenType)),
-                amount,
-                timestamp
-            );
-    }
-
-    /**
      * @notice Handle WBTC deposit
      */
     function _handleWbtcDeposit(
@@ -830,7 +774,7 @@ contract StrategyEngine is
         bytes32 s
     ) internal {
         // Get or create user position
-        address userPosition = userToPosition[msg.sender];
+        address userPosition = userStates[msg.sender].position;
         if (userPosition == address(0)) {
             userPosition = _createUserPosition(msg.sender);
         }
@@ -838,11 +782,9 @@ contract StrategyEngine is
         // Use permit to authorize
         IERC20Permit(address(wbtc)).permit(msg.sender, address(this), amount, deadline, v, r, s);
 
-        // Transfer WBTC to contract
-        wbtc.safeTransferFrom(msg.sender, address(this), amount);
-
         // Transfer WBTC to user position and deposit into Aave
-        wbtc.safeTransfer(userPosition, amount);
+        wbtc.safeTransferFrom(msg.sender, userPosition, amount);
+
         UserPosition(payable(userPosition)).executeAaveDeposit(
             address(aavePool),
             address(wbtc),
@@ -851,24 +793,15 @@ contract StrategyEngine is
         );
 
         // Calculate and borrow USDC
-        (
-            uint256 totalCollateralBase,
-            ,
-            ,
-            uint256 currentLiquidationThreshold,
-            ,
+        uint256 borrowAmount = _calculateBorrowAmount(userPosition);
 
-        ) = _getUserAccountData(userPosition);
-
-        uint256 borrowAmount = StrategyLib.calculateBorrowAmount(
-            aaveOracle,
+        UserPosition(payable(userPosition)).executeBorrow(
+            address(aavePool),
             address(usdc),
-            totalCollateralBase,
-            currentLiquidationThreshold,
-            defaultLiquidationThreshold
+            borrowAmount,
+            2, // Variable rate
+            referralCode
         );
-
-        borrowAmount = _executeBorrow(userPosition, borrowAmount);
 
         // Update user information
         _updateUserInfo(msg.sender, TokenType.WBTC, amount, borrowAmount);
@@ -909,7 +842,7 @@ contract StrategyEngine is
         uint256 depositAmount,
         uint256 borrowAmount
     ) internal {
-        UserInfo storage info = userInfo[user];
+        UserState storage state = userStates[user];
 
         // Create new deposit record
         DepositRecord memory newDeposit = DepositRecord({
@@ -917,21 +850,22 @@ contract StrategyEngine is
             tokenType: tokenType,
             amount: depositAmount,
             timestamp: block.timestamp,
-            borrowAmount: borrowAmount
+            borrowAmount: borrowAmount,
+            isWithdrawn: false
         });
 
         // Add deposit record
-        info.deposits.push(newDeposit);
+        state.info.deposits.push(newDeposit);
 
         // Update total amount based on token type
         if (tokenType == TokenType.WBTC) {
-            info.totalWbtcDeposited += depositAmount;
+            state.info.totalWbtcDeposited += depositAmount;
         } else {
-            info.totalUsdcDeposited += depositAmount;
+            state.info.totalUsdcDeposited += depositAmount;
         }
 
-        info.totalBorrowAmount += borrowAmount;
-        info.lastDepositTime = block.timestamp;
+        state.info.totalBorrowAmount += borrowAmount;
+        state.info.lastDepositTime = block.timestamp;
     }
 
     /**
@@ -940,20 +874,18 @@ contract StrategyEngine is
     function _calculateBorrowAmount(address user) internal view returns (uint256) {
         (
             uint256 totalCollateralBase,
-            ,
+            uint256 totalDebtBase,
             ,
             uint256 currentLiquidationThreshold,
             ,
 
         ) = _getUserAccountData(user);
 
-        // Check if user has enough collateral
-        if (totalCollateralBase == 0) revert StrategyEngine__NoCollateral();
-
         return
             StrategyLib.calculateBorrowAmount(
                 aaveOracle,
                 address(usdc),
+                totalDebtBase,
                 totalCollateralBase,
                 currentLiquidationThreshold,
                 defaultLiquidationThreshold
@@ -971,7 +903,7 @@ contract StrategyEngine is
      * @notice Create a user position
      */
     function _createUserPosition(address user) internal returns (address) {
-        if (userToPosition[user] != address(0)) revert StrategyEngine__PositionAlreadyExists();
+        if (userStates[user].position != address(0)) revert StrategyEngine__PositionAlreadyExists();
 
         bytes32 salt = keccak256(abi.encodePacked(user));
 
@@ -989,8 +921,7 @@ contract StrategyEngine is
         ERC1967Proxy proxy = new ERC1967Proxy{salt: salt}(address(userPosition), initData);
 
         address positionAddress = address(proxy);
-        userToPosition[user] = positionAddress;
-        positionToUser[positionAddress] = user;
+        userStates[user].position = positionAddress;
 
         // Add user to array
         _addUserToArray(user);
@@ -1021,14 +952,10 @@ contract StrategyEngine is
     /**
      * @notice Handle profit from withdrawal
      */
-    function _handleProfit(
-        uint256 profit,
-        uint256 withdrawUSDCAmount
-    ) internal returns (uint256 userProfit, uint256 totalWithdrawAmount) {
+    function _handleProfit(uint256 totalProfit) internal returns (uint256 userProfit) {
         return
             StrategyLib.handleProfit(
-                profit,
-                withdrawUSDCAmount,
+                totalProfit,
                 platformFeePercentage,
                 usdc,
                 address(vault),
@@ -1041,32 +968,14 @@ contract StrategyEngine is
      * @notice Execute repayment to Aave
      */
     function _executeRepay(address userPosition, uint256 repayAmount) internal returns (uint256) {
-        _transferUsdc(address(this), userPosition, repayAmount);
-
-        return
-            UserPosition(payable(userPosition)).executeRepay(
-                address(aavePool),
-                address(usdc),
-                repayAmount,
-                2 // Variable rate
-            );
+        return StrategyLib.executeRepay(usdc, userPosition, address(aavePool), repayAmount);
     }
 
     /**
      * @notice Execute borrowing from Aave
      */
     function _executeBorrow(address userPosition, uint256 borrowAmount) internal returns (uint256) {
-        UserPosition(payable(userPosition)).executeBorrow(
-            address(aavePool),
-            address(usdc),
-            borrowAmount,
-            2, // Variable rate
-            0 // referralCode
-        );
-
-        _transferUsdc(userPosition, address(this), borrowAmount);
-
-        return borrowAmount;
+        return StrategyLib.executeBorrow(usdc, userPosition, address(aavePool), borrowAmount);
     }
 
     /**
@@ -1076,7 +985,7 @@ contract StrategyEngine is
         address user,
         bool isForBorrowCapacity
     ) internal view returns (address) {
-        address userPosition = userToPosition[user];
+        address userPosition = userStates[user].position;
         if (userPosition == address(0)) {
             if (isForBorrowCapacity) {
                 revert StrategyEngine__NoUserPosition();
@@ -1092,5 +1001,14 @@ contract StrategyEngine is
      */
     function _getUserPosition(address user) internal view returns (address) {
         return _getUserPosition(user, false);
+    }
+
+    /**
+     * @notice Mark all deposits as withdrawn
+     */
+    function _markDepositsAsWithdrawn(UserInfo storage info) internal {
+        for (uint256 i = 0; i < info.deposits.length; i++) {
+            info.deposits[i].isWithdrawn = true;
+        }
     }
 }

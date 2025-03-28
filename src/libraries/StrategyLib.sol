@@ -7,6 +7,9 @@ import {IAaveOracle} from "../interfaces/aave/IAaveOracle.sol";
 import {IPoolDataProvider} from "../interfaces/aave/IAaveProtocolDataProvider.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ICpToken} from "../interfaces/ICpToken.sol";
+import {console} from "forge-std/console.sol";
+import {IAavePool} from "../interfaces/aave/IAavePool.sol";
+import {UserPosition} from "../UserPosition.sol";
 
 /**
  * @title StrategyLib
@@ -22,6 +25,9 @@ library StrategyLib {
 
     // Constants
     uint256 private constant BASIS_POINTS = 10000; // 100%
+
+    // Events
+    event TransferToVault(uint256 amount);
 
     /**
      * @notice Transfers USDC from one address to another
@@ -43,13 +49,13 @@ library StrategyLib {
      * @param aaveOracle The Aave oracle contract to get price data
      * @param usdc The USDC token contract address
      * @param totalCollateralBase User's total collateral in base units
-     * @param currentLiquidationThreshold User's liquidation threshold
      * @param defaultLiquidationThreshold The default liquidation threshold
      * @return borrowAmount The amount user can borrow
      */
     function calculateBorrowAmount(
         IAaveOracle aaveOracle,
         address usdc,
+        uint256 totalDebtBase,
         uint256 totalCollateralBase,
         uint256 currentLiquidationThreshold,
         uint256 defaultLiquidationThreshold
@@ -58,9 +64,15 @@ library StrategyLib {
             return 0; // Return 0 instead of reverting for library function
         }
 
-        // totalCollateralBase * currentLiquidationThreshold / 1.56 = maxBorrowIn
-        uint256 maxBorrowIn = (totalCollateralBase * currentLiquidationThreshold) /
+        // ((totalCollateralBase * BASIS_POINTS) / ltv) -- availableBorrowBase
+        // availableBorrowBase * currentLiquidationThreshold / defaultLiquidationThreshold -- maxBorrowIn
+        // maxBorrowIn - totalDebtBase -- currentBorrowAmount
+        uint256 availableBorrowBase = (totalCollateralBase * currentLiquidationThreshold) /
             (defaultLiquidationThreshold * 10 ** 2);
+        if (availableBorrowBase < totalDebtBase) {
+            return 0;
+        }
+        uint256 maxBorrowIn = availableBorrowBase - totalDebtBase;
 
         uint256 usdcPrice = aaveOracle.getAssetPrice(usdc);
         uint256 borrowAmount = (maxBorrowIn * 10 ** IERC20Metadata(usdc).decimals()) / usdcPrice;
@@ -106,44 +118,145 @@ library StrategyLib {
 
     /**
      * @notice Handles profit distribution including platform fees
-     * @param profit The profit amount
-     * @param withdrawUSDCAmount The USDC amount to withdraw
+     * @param totalProfit The profit amount
      * @param platformFeePercentage The platform fee percentage
      * @param usdc The USDC token contract
      * @param vault The vault address to send platform fees
-     * @param cpToken The CP token contract for minting rewards
-     * @param recipient The recipient of the profit
      * @return userProfit The user's portion of profit
-     * @return totalWithdrawAmount The total amount to withdraw
      */
     function handleProfit(
-        uint256 profit,
-        uint256 withdrawUSDCAmount,
+        uint256 totalProfit,
         uint256 platformFeePercentage,
         IERC20 usdc,
         address vault,
-        ICpToken cpToken,
-        address recipient
-    ) internal returns (uint256 userProfit, uint256 totalWithdrawAmount) {
-        if (profit <= 0) return (0, withdrawUSDCAmount);
+        ICpToken /* cpToken */,
+        address /* recipient */
+    ) internal returns (uint256 userProfit) {
+        if (totalProfit <= 0) return 0;
 
         // Calculate platform fee
-        uint256 platformFee = (profit * platformFeePercentage) / BASIS_POINTS;
-        userProfit = profit - platformFee;
+        uint256 platformFee = (totalProfit * platformFeePercentage) / BASIS_POINTS;
+        userProfit = totalProfit - platformFee;
 
         // Store platform fee in vault
         if (platformFee > 0) {
             transferUsdc(usdc, address(this), vault, platformFee);
+            emit TransferToVault(platformFee);
         }
 
-        totalWithdrawAmount = withdrawUSDCAmount + userProfit;
-
-        // Transfer user profit
-        transferUsdc(usdc, address(this), recipient, totalWithdrawAmount);
-
         // Mint reward token
-        cpToken.mint(recipient, userProfit);
+        // cpToken.mint(recipient, userProfit);
 
-        return (userProfit, totalWithdrawAmount);
+        return userProfit;
+    }
+
+    function handleWbtcWithdrawal(
+        IERC20 usdc,
+        IERC20 wbtc,
+        address user,
+        uint256 amount,
+        uint256 totalWbtcAmount,
+        address userPosition,
+        IPoolDataProvider aaveProtocolDataProvider,
+        IAavePool aavePool
+    ) internal returns (uint256 amountUsdcAfterRepay, uint256 repayedAmount) {
+        amountUsdcAfterRepay = amount;
+
+        if (totalWbtcAmount > 0) {
+            // Calculate amount to repay to Aave
+            uint256 needRepayAmount = calculateRepayAmount(
+                address(usdc),
+                userPosition,
+                aaveProtocolDataProvider
+            );
+
+            // Repay to Aave
+            usdc.approve(address(aavePool), needRepayAmount);
+            repayedAmount = UserPosition(payable(userPosition)).executeRepay(
+                address(aavePool),
+                address(usdc),
+                needRepayAmount,
+                2
+            );
+
+            if (needRepayAmount > amount) {
+                revert("WithdrawalNeedRepayAmountLess");
+            }
+
+            // Withdraw WBTC from Aave
+            uint256 withdrawnAmount = UserPosition(payable(userPosition)).executeAaveWithdraw(
+                address(aavePool),
+                address(wbtc),
+                totalWbtcAmount,
+                user
+            );
+            require(withdrawnAmount == totalWbtcAmount, "Withdrawal failed");
+
+            // Update remaining USDC amount
+            amountUsdcAfterRepay = amount - repayedAmount;
+        }
+    }
+
+    function handleUsdcWithdrawalAndProfit(
+        IERC20 usdc,
+        address user,
+        uint256 amountUsdcAfterRepay,
+        uint256 totalUsdcPrincipal,
+        uint256 platformFeePercentage,
+        address vault,
+        ICpToken cpToken
+    ) internal returns (uint256 userProfit) {
+        uint256 availableUsdc = usdc.balanceOf(address(this));
+        uint256 profit;
+
+        if (totalUsdcPrincipal > 0) {
+            profit = amountUsdcAfterRepay - totalUsdcPrincipal;
+        } else {
+            profit = amountUsdcAfterRepay;
+        }
+
+        userProfit = handleProfit(profit, platformFeePercentage, usdc, vault, cpToken, user);
+
+        uint256 totalTransferAmount = totalUsdcPrincipal + userProfit;
+        require(availableUsdc >= totalTransferAmount, "InsufficientContractBalance");
+
+        usdc.safeTransfer(user, totalTransferAmount);
+        return userProfit;
+    }
+
+    function executeRepay(
+        IERC20 usdc,
+        address userPosition,
+        address aavePool,
+        uint256 repayAmount
+    ) internal returns (uint256) {
+        usdc.approve(aavePool, repayAmount);
+        return
+            UserPosition(payable(userPosition)).executeRepay(
+                address(aavePool),
+                address(usdc),
+                repayAmount,
+                2
+            );
+    }
+
+    function executeBorrow(
+        IERC20 usdc,
+        address userPosition,
+        address aavePool,
+        uint256 borrowAmount
+    ) internal returns (uint256) {
+        UserPosition(payable(userPosition)).executeBorrow(
+            address(aavePool),
+            address(usdc),
+            borrowAmount,
+            2, // Variable rate
+            0 // referralCode
+        );
+
+        usdc.approve(address(this), borrowAmount);
+        usdc.transferFrom(userPosition, address(this), borrowAmount);
+
+        return borrowAmount;
     }
 }

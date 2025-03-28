@@ -76,14 +76,18 @@ contract UpgradeTest is Test {
     // Addresses
     address public wbtc;
     address public usdc;
-    address public deployer;
-    address public user;
+    address public aaveOracle;
+    uint256 public deployerKey;
     address public safeWallet;
+
+    address public DEPLOYER;
+    address public user1;
+    address public user2;
+    address public user3;
 
     // Signers for multisig
     address[] public safeSigners;
     uint256[] public safeSignerKeys;
-    uint256 public deployerKey;
     uint256 public threshold;
 
     // Event to test against
@@ -95,9 +99,12 @@ contract UpgradeTest is Test {
         (engine, cpToken, vault, helperConfig) = deployScript.run();
 
         // Get configuration
-        (wbtc, usdc, , , , deployerKey, safeWallet) = helperConfig.activeNetworkConfig();
-        deployer = vm.addr(deployerKey);
-        user = makeAddr("user");
+        (wbtc, usdc, , aaveOracle, , deployerKey, safeWallet) = helperConfig.activeNetworkConfig();
+
+        DEPLOYER = vm.addr(deployerKey);
+        user1 = makeAddr("user1");
+        user2 = makeAddr("user2");
+        user3 = makeAddr("user3");
 
         // Create mock Safe signers (4 signers with 3 threshold)
         threshold = 3;
@@ -114,23 +121,23 @@ contract UpgradeTest is Test {
 
         // Mock the Safe contract behavior
         vm.mockCall(
-            safeWallet,
+            DEPLOYER,
             abi.encodeWithSelector(ISafe.getOwners.selector),
             abi.encode(safeSigners)
         );
 
         vm.mockCall(
-            safeWallet,
+            DEPLOYER,
             abi.encodeWithSelector(ISafe.getThreshold.selector),
             abi.encode(threshold)
         );
 
         // Give user and Safe wallet some ETH for gas
-        vm.deal(user, 1 ether);
-        vm.deal(safeWallet, 1 ether);
+        vm.deal(user1, 1 ether);
+        vm.deal(DEPLOYER, 1 ether);
 
         // Deal some USDC to user and engine
-        deal(usdc, user, 1000e6);
+        deal(usdc, user1, 1000e6);
         deal(usdc, address(engine), 1000e6);
     }
 
@@ -146,12 +153,12 @@ contract UpgradeTest is Test {
         VaultV2 vaultV2Implementation = new VaultV2();
 
         // Try to upgrade from unauthorized address (user)
-        vm.prank(user);
+        vm.prank(user1);
         vm.expectRevert(); // Expect revert due to unauthorized access
         vault.upgradeToAndCall(address(vaultV2Implementation), "");
 
         // Try to upgrade from deployer (who transferred upgrade rights to safeWallet)
-        vm.prank(deployer);
+        vm.prank(DEPLOYER);
         vm.expectRevert(); // Expect revert due to unauthorized access
         vault.upgradeToAndCall(address(vaultV2Implementation), "");
 
@@ -208,7 +215,7 @@ contract UpgradeTest is Test {
 
         // 6. Verify original functionality still works
         // First, add funds to test
-        vm.startPrank(user);
+        vm.startPrank(user1);
         IERC20(usdc).approve(address(upgradedVault), 100e6);
         upgradedVault.depositProfit(100e6);
         vm.stopPrank();
@@ -232,12 +239,12 @@ contract UpgradeTest is Test {
         StrategyEngineV2 engineV2Implementation = new StrategyEngineV2();
 
         // Try to upgrade from unauthorized address (user)
-        vm.prank(user);
+        vm.prank(user1);
         vm.expectRevert(); // Expect revert due to unauthorized access
         engine.upgradeToAndCall(address(engineV2Implementation), "");
 
         // Try to upgrade from deployer (who transferred upgrade rights to safeWallet)
-        vm.prank(deployer);
+        vm.prank(DEPLOYER);
         vm.expectRevert(); // Expect revert due to unauthorized access
         engine.upgradeToAndCall(address(engineV2Implementation), "");
 
@@ -298,35 +305,28 @@ contract UpgradeTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function test_RealMultisigVaultUpgrade() public {
-        // 1. Deploy realistic Safe multisig wallet
-        address realSafeWallet = _deployRealSafeWallet();
-
-        // 2. Deploy a new Vault with the real Safe wallet
+        // 1. Deploy a new Vault with the real Safe wallet
         Vault vaultImpl = new Vault();
-        bytes memory initData = abi.encodeWithSelector(
-            Vault.initialize.selector,
-            usdc,
-            realSafeWallet
-        );
+        bytes memory initData = abi.encodeWithSelector(Vault.initialize.selector, usdc, safeWallet);
         ERC1967Proxy proxy = new ERC1967Proxy(address(vaultImpl), initData);
         Vault testVault = Vault(address(proxy));
 
         // Verify initialization
-        assertEq(testVault.safeWallet(), realSafeWallet);
+        assertEq(testVault.safeWallet(), safeWallet);
 
-        // 3. Deploy new implementation for upgrade
+        // 2. Deploy new implementation for upgrade
         VaultV2 vaultV2Implementation = new VaultV2();
 
-        // 4. Create transaction data
+        // 3. Create transaction data
         bytes memory upgradeCalldata = abi.encodeWithSelector(
             testVault.upgradeToAndCall.selector,
             address(vaultV2Implementation),
             abi.encodeWithSelector(VaultV2.initializeV2.selector)
         );
 
-        // 5. Get transaction hash that would need to be signed
+        // 4. Get transaction hash that would need to be signed
         bytes32 txHash = _getSafeTransactionHash(
-            realSafeWallet,
+            safeWallet,
             address(testVault),
             0, // value
             upgradeCalldata,
@@ -339,20 +339,13 @@ contract UpgradeTest is Test {
             0 // nonce
         );
 
-        // 6. Collect signatures from threshold number of signers
+        // 5. Collect signatures from threshold number of signers
         bytes memory signatures = _collectSignatures(txHash, threshold);
 
-        // 7. Execute transaction through Safe
-        _executeSafeTransaction(
-            realSafeWallet,
-            address(testVault),
-            0,
-            upgradeCalldata,
-            0,
-            signatures
-        );
+        // 6. Execute transaction through Safe
+        _executeSafeTransaction(safeWallet, address(testVault), 0, upgradeCalldata, 0, signatures);
 
-        // 8. Verify upgrade was successful
+        // 7. Verify upgrade was successful
         VaultV2 upgradedVault = VaultV2(address(testVault));
         assertEq(
             upgradedVault.implementation(),
@@ -364,10 +357,7 @@ contract UpgradeTest is Test {
     }
 
     function test_StrategyEngineUpgradeThroughSafeTx() public {
-        // 1. Deploy realistic Safe multisig wallet
-        address realSafeWallet = _deployRealSafeWallet();
-
-        // 2. Deploy a new StrategyEngine with the real Safe wallet for testing
+        // 1. Deploy a new StrategyEngine with the real Safe wallet for testing
         EngineInitParams memory params = EngineInitParams({
             wbtc: wbtc,
             usdc: usdc,
@@ -376,7 +366,7 @@ contract UpgradeTest is Test {
             aaveProtocolDataProvider: makeAddr("aaveDataProvider"),
             cpToken: address(cpToken),
             vault: address(vault),
-            safeWallet: realSafeWallet
+            safeWallet: safeWallet
         });
 
         StrategyEngine engineImpl = new StrategyEngine();
@@ -385,22 +375,22 @@ contract UpgradeTest is Test {
         StrategyEngine testEngine = StrategyEngine(address(proxy));
 
         // Verify initialization
-        assertEq(testEngine.upgradeRightsOwner(), realSafeWallet);
+        assertEq(testEngine.upgradeRightsOwner(), safeWallet);
 
-        // 3. Deploy new implementation for upgrade
+        // 2. Deploy new implementation for upgrade
         StrategyEngineV2 engineV2Implementation = new StrategyEngineV2();
 
-        // 4. Create transaction data for SafeTx service
+        // 3. Create transaction data for SafeTx service
         bytes memory upgradeCalldata = abi.encodeWithSelector(
             testEngine.upgradeToAndCall.selector,
             address(engineV2Implementation),
             abi.encodeWithSelector(StrategyEngineV2.initializeV2.selector)
         );
 
-        // 5. Simulate creating a Safe transaction
+        // 4. Simulate creating a Safe transaction
         // This would typically be done through the Safe UI or Safe Transaction Service API
         bytes32 safeTxHash = _getSafeTransactionHash(
-            realSafeWallet,
+            safeWallet,
             address(testEngine),
             0, // value
             upgradeCalldata,
@@ -413,7 +403,7 @@ contract UpgradeTest is Test {
             0 // nonce
         );
 
-        // 6. Simulate collecting off-chain signatures from signers
+        // 5. Simulate collecting off-chain signatures from signers
         // Each signer would sign the transaction hash individually through the Safe UI
         bytes memory signatures = new bytes(0);
 
@@ -422,20 +412,20 @@ contract UpgradeTest is Test {
             signatures = abi.encodePacked(signatures, r, s, v); // Safe specific format
         }
 
-        // 7. Simulate Safe Transaction Service execution
+        // 6. Simulate Safe Transaction Service execution
         // Any user can submit the collected signatures to execute the transaction
         console2.log("Executing upgrade through Safe Transaction Service...");
         console2.log("Target contract: ", address(testEngine));
         console2.log("Implementation target: ", address(engineV2Implementation));
 
         // Execute upgrade transaction
-        vm.prank(realSafeWallet);
+        vm.prank(safeWallet);
         testEngine.upgradeToAndCall(
             address(engineV2Implementation),
             abi.encodeWithSelector(StrategyEngineV2.initializeV2.selector)
         );
 
-        // 8. Verify upgrade was successful
+        // 7. Verify upgrade was successful
         StrategyEngineV2 upgradedEngine = StrategyEngineV2(address(testEngine));
         assertEq(
             upgradedEngine.implementation(),
@@ -445,7 +435,7 @@ contract UpgradeTest is Test {
         assertEq(upgradedEngine.engineVersion(), 2, "V2 initialization should be complete");
         assertEq(upgradedEngine.getVersion(), 2, "New V2 function should work");
 
-        // 9. Test new functionality added in V2
+        // 8. Test new functionality added in V2
         // First give the engine some tokens to test emergency withdraw
         deal(usdc, address(upgradedEngine), 500e6);
         uint256 initialBalance = IERC20(usdc).balanceOf(address(upgradedEngine));
@@ -454,12 +444,12 @@ contract UpgradeTest is Test {
         bytes memory emergencyWithdrawCalldata = abi.encodeWithSelector(
             StrategyEngineV2.emergencyWithdraw.selector,
             usdc,
-            user,
+            user1,
             100e6
         );
 
         // Execute emergency withdrawal
-        vm.prank(realSafeWallet);
+        vm.prank(safeWallet);
         (bool success, ) = address(upgradedEngine).call(emergencyWithdrawCalldata);
         assertTrue(success, "Emergency withdrawal should succeed");
 
@@ -470,7 +460,7 @@ contract UpgradeTest is Test {
             "Emergency withdrawal should reduce balance"
         );
         assertEq(
-            IERC20(usdc).balanceOf(user),
+            IERC20(usdc).balanceOf(user1),
             1100e6,
             "User should receive emergency withdrawal funds"
         );
@@ -479,27 +469,6 @@ contract UpgradeTest is Test {
     /*//////////////////////////////////////////////////////////////
                         HELPER FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-
-    function _deployRealSafeWallet() internal returns (address) {
-        // This is a simplified mock of Safe deployment
-        // In a real scenario, you would deploy an actual Safe contract
-        address mockSafe = makeAddr("realSafe");
-
-        // Set up mocks to make the Safe behave correctly
-        vm.mockCall(
-            mockSafe,
-            abi.encodeWithSelector(ISafe.getOwners.selector),
-            abi.encode(safeSigners)
-        );
-
-        vm.mockCall(
-            mockSafe,
-            abi.encodeWithSelector(ISafe.getThreshold.selector),
-            abi.encode(threshold)
-        );
-
-        return mockSafe;
-    }
 
     function _getSafeTransactionHash(
         address safe,

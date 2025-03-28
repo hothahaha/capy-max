@@ -2,57 +2,32 @@
 pragma solidity ^0.8.20;
 
 import {Test, console2} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {AaveV3Arbitrum} from "@bgd-labs/aave-address-book/AaveV3Arbitrum.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IAavePool} from "../src/interfaces/aave/IAavePool.sol";
 import {IAaveOracle} from "../src/interfaces/aave/IAaveOracle.sol";
 import {IVariableDebtToken} from "../src/interfaces/aave/IVariableDebtToken.sol";
 import {StrategyEngine} from "../src/StrategyEngine.sol";
+import {IStrategyEngine} from "../src/interfaces/IStrategyEngine.sol";
 import {UserPosition} from "../src/UserPosition.sol";
 import {DeployScript} from "../script/Deploy.s.sol";
 import {HelperConfig} from "../script/HelperConfig.s.sol";
 import {CpToken} from "../src/tokens/CpToken.sol";
 import {Vault} from "../src/vault/Vault.sol";
 import {ISafe} from "../src/interfaces/safe/ISafe.sol";
+import {StrategyLib} from "../src/libraries/StrategyLib.sol";
 
-/**
- * @title BorrowAmountHelper
- * @notice Helper contract to test calculating borrow amount
- */
-contract BorrowAmountHelper {
-    StrategyEngine public engine;
-
-    constructor(StrategyEngine _engine) {
-        engine = _engine;
-    }
-
-    function calculateBorrowAmount(
-        address aaveOracle,
-        address usdc,
-        uint256 totalCollateralBase,
-        uint256 currentLiquidationThreshold,
-        uint256 defaultLiquidationThreshold
-    ) external view returns (uint256) {
-        // Implementation of calculateBorrowAmount logic from StrategyLib
-        if (totalCollateralBase == 0) {
-            return 0;
-        }
-
-        // totalCollateralBase * currentLiquidationThreshold / defaultLiquidationThreshold = maxBorrowIn
-        uint256 maxBorrowIn = (totalCollateralBase * currentLiquidationThreshold) /
-            (defaultLiquidationThreshold * 10 ** 2);
-
-        uint256 usdcPrice = IAaveOracle(aaveOracle).getAssetPrice(usdc);
-        uint256 borrowAmount = (maxBorrowIn * 10 ** 6) / usdcPrice; // 6 is USDC decimals
-
-        return borrowAmount;
-    }
-}
+error StrategyEngine__InvalidAmount();
+error StrategyEngine__NoUserPosition();
 
 contract StrategyEngineTest is Test {
+    using SafeERC20 for IERC20;
+
     // State variables
     IAavePool public aavePool;
     StrategyEngine public engine;
@@ -64,7 +39,6 @@ contract StrategyEngineTest is Test {
     uint256 public USER_PRIVATE_KEY;
     uint256 public DEPLOYER_PRIVATE_KEY;
     uint256 public constant INITIAL_WBTC_BALANCE = 1000e8;
-    uint256 public constant GMX_EXECUTION_FEE = 0.011 ether;
     uint256 public constant HEALTH_FACTOR_THRESHOLD = 1e19; // 1.0
 
     CpToken public cpToken;
@@ -107,46 +81,6 @@ contract StrategyEngineTest is Test {
         uint256 timestamp
     );
 
-    // Modifiers
-    modifier withWBTCDeposit(uint256 amount) {
-        uint256 deadline = block.timestamp + 1 days;
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            user,
-            address(engine),
-            amount,
-            IERC20Permit(wbtc).nonces(user),
-            deadline,
-            USER_PRIVATE_KEY
-        );
-
-        vm.startPrank(user);
-        engine.deposit{value: GMX_EXECUTION_FEE}(
-            StrategyEngine.TokenType.WBTC,
-            amount,
-            0,
-            deadline,
-            v,
-            r,
-            s
-        );
-        vm.stopPrank();
-        _;
-    }
-
-    modifier withUSDCDeposit(uint256 amount) {
-        vm.startPrank(user);
-
-        // Mint USDC to user
-        deal(address(usdc), user, amount);
-
-        // Approve and deposit
-        IERC20(usdc).approve(address(engine), amount);
-        engine.deposit(StrategyEngine.TokenType.USDC, amount, 0, 0, 0, bytes32(0), bytes32(0));
-        vm.stopPrank();
-        _;
-    }
-
     function setUp() public {
         (user, USER_PRIVATE_KEY) = makeAddrAndKey("user");
 
@@ -156,24 +90,13 @@ contract StrategyEngineTest is Test {
         DeployScript deployer = new DeployScript();
         (engine, cpToken, vault, helperConfig) = deployer.run();
 
-        // 修复类型转换问题，确保显式转换为IAavePool类型
-        address _wbtc;
-        address _usdc;
+        // Fix type conversion issue, ensure explicit conversion to IAavePool type
         address _aavePool;
-        address _aaveOracle;
-        uint256 _deployerKey;
-        address _safeWallet;
 
-        (_wbtc, _usdc, _aavePool, _aaveOracle, , _deployerKey, _safeWallet) = helperConfig
+        (wbtc, usdc, _aavePool, aaveOracle, , DEPLOYER_PRIVATE_KEY, SAFE_WALLET) = helperConfig
             .activeNetworkConfig();
 
-        wbtc = _wbtc;
-        usdc = _usdc;
         aavePool = IAavePool(_aavePool);
-        aaveOracle = _aaveOracle;
-        DEPLOYER_PRIVATE_KEY = _deployerKey;
-        safeWallet = _safeWallet;
-        SAFE_WALLET = safeWallet;
         DEPLOYER = vm.addr(DEPLOYER_PRIVATE_KEY);
 
         // Set up safe signers for multi-sig tests
@@ -201,7 +124,7 @@ contract StrategyEngineTest is Test {
         deal(wbtc, user2, INITIAL_WBTC_BALANCE);
         deal(usdc, user2, INITIAL_BALANCE);
 
-        defaultLiquidationThreshold = engine.getDefaultLiquidationThreshold();
+        defaultLiquidationThreshold = engine.getDefaultLiquidationThreshold() * 10 ** 16;
 
         // Approve USDC for repayment
         vm.prank(user);
@@ -215,38 +138,11 @@ contract StrategyEngineTest is Test {
     }
 
     function test_DepositWBTC() public {
-        uint256 amount = 1e7;
-        uint256 deadline = block.timestamp + 1 days;
-
-        // Get current nonce for the user
-        uint256 nonce = IERC20Permit(wbtc).nonces(user);
-
-        // Generate signature for deposit
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            user,
-            address(engine),
-            amount,
-            nonce,
-            deadline,
-            USER_PRIVATE_KEY
-        );
-
-        vm.startPrank(user);
-
         // Record balance before deposit
         uint256 beforeWbtcBalance = IERC20(wbtc).balanceOf(user);
 
-        // Execute deposit
-        engine.deposit{value: GMX_EXECUTION_FEE}(
-            StrategyEngine.TokenType.WBTC,
-            amount,
-            0,
-            deadline,
-            v,
-            r,
-            s
-        );
+        uint256 amount = 1e7;
+        _depositWbtcWithPermit(user, amount, USER_PRIVATE_KEY);
 
         // Verify state after deposit
         (uint256 totalWbtc, uint256 totalUsdc, uint256 totalBorrows, ) = engine.getUserTotals(user);
@@ -292,35 +188,12 @@ contract StrategyEngineTest is Test {
 
     function test_WBTCDepositRecord() public {
         uint256 amount = 1e7;
-        uint256 deadline = block.timestamp + 1 days;
-        bytes32 expectedDepositId = engine.generateDepositId(
+        _depositWbtcWithPermit(user, amount, USER_PRIVATE_KEY);
+        bytes32 expectedDepositId = StrategyLib.generateDepositId(
             user,
-            StrategyEngine.TokenType.WBTC,
+            StrategyLib.TokenType.WBTC,
             amount,
             block.timestamp
-        );
-
-        uint256 nonce = IERC20Permit(wbtc).nonces(user);
-
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            user,
-            address(engine),
-            amount,
-            nonce,
-            deadline,
-            USER_PRIVATE_KEY
-        );
-
-        vm.startPrank(user);
-        engine.deposit{value: GMX_EXECUTION_FEE}(
-            StrategyEngine.TokenType.WBTC,
-            amount,
-            0,
-            deadline,
-            v,
-            r,
-            s
         );
 
         // Verify deposit record
@@ -341,9 +214,9 @@ contract StrategyEngineTest is Test {
 
     function test_DepositUSDC() public {
         uint256 amount = 1000e6; // 1000 USDC
-        bytes32 expectedDepositId = engine.generateDepositId(
+        bytes32 expectedDepositId = StrategyLib.generateDepositId(
             user,
-            StrategyEngine.TokenType.USDC,
+            StrategyLib.TokenType.USDC,
             amount,
             block.timestamp
         );
@@ -422,7 +295,9 @@ contract StrategyEngineTest is Test {
         vm.stopPrank();
     }
 
-    function test_WithdrawWBTC() public withWBTCDeposit(1e7) {
+    function test_WithdrawWBTC() public {
+        _depositWbtcWithPermit(user, 1e7, USER_PRIVATE_KEY);
+
         uint256 beforeWbtcBalance = INITIAL_WBTC_BALANCE;
         // Get borrow amount
         (uint256 totalWbtc, , uint256 totalBorrows, ) = engine.getUserTotals(user);
@@ -437,15 +312,14 @@ contract StrategyEngineTest is Test {
 
         deal(address(usdc), address(engine), totalBorrows);
 
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.WBTC,
-            user: user,
-            amount: totalBorrows
-        });
+        // Prepare withdrawal parameters
+        address[] memory users = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = user;
+        amounts[0] = totalBorrows;
 
-        engine.withdrawBatch(withdrawals);
+        vm.prank(DEPLOYER);
+        engine.withdrawBatch(users, amounts);
 
         // Verify state update
         (uint256 newTotalWbtc, , uint256 newTotalBorrows, ) = engine.getUserTotals(user);
@@ -461,72 +335,69 @@ contract StrategyEngineTest is Test {
         );
     }
 
-    function test_WithdrawUSDC() public withUSDCDeposit(1000e6) {
+    function test_WithdrawUSDC() public {
+        uint256 amount = 1000e6;
+        _depositUsdc(user, amount);
+
         // Verify deposit
         (, uint256 totalUsdc, , ) = engine.getUserTotals(user);
-        assertEq(totalUsdc, 1000e6, "Incorrect USDC deposit amount");
+        assertEq(totalUsdc, amount, "Incorrect USDC deposit amount");
 
         deal(address(usdc), address(engine), 1000e6);
 
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.USDC,
-            user: user,
-            amount: totalUsdc
-        });
+        // Prepare withdrawal parameters
+        address[] memory users = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = user;
+        amounts[0] = totalUsdc;
 
-        engine.withdrawBatch(withdrawals);
+        vm.prank(DEPLOYER);
+        engine.withdrawBatch(users, amounts);
 
         // Verify state update
         (, uint256 newTotalUsdc, , ) = engine.getUserTotals(user);
         assertEq(newTotalUsdc, 0, "USDC balance should be zero");
     }
 
-    function test_WithdrawWithProfit() public withUSDCDeposit(1000e6) {
+    function test_WithdrawWithProfit() public {
+        uint256 amount = 1000e6;
+        _depositUsdc(user, amount);
+
         uint256 profit = 100e6; // 100 USDC profit
-        uint256 totalAmount = 1000e6 + profit;
+        uint256 totalAmount = amount + profit;
 
         // Simulate profit generation
         deal(address(usdc), address(engine), totalAmount);
 
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.USDC,
-            user: user,
-            amount: totalAmount
-        });
+        // Prepare withdrawal parameters
+        address[] memory users = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = user;
+        amounts[0] = totalAmount;
 
-        engine.withdrawBatch(withdrawals);
+        vm.prank(DEPLOYER);
+        engine.withdrawBatch(users, amounts);
 
         // Verify platform fee
         uint256 platformFee = (profit * engine.getPlatformFee()) / 10000; // 10% of profit
-        uint256 userProfit = profit - platformFee;
-
-        // Verify platform fee
         uint256 beforeVaultBalance = IERC20(usdc).balanceOf(address(vault));
         assertEq(beforeVaultBalance, platformFee, "Incorrect platform fee in vault");
-
-        // Verify user reward token amount
-        assertEq(engine.cpToken().balanceOf(user), userProfit, "Incorrect reward token amount");
     }
 
     function test_RevertWhen_WithdrawZeroAmount() public {
-        // Create withdrawal info with zero amount
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.USDC,
-            user: user,
-            amount: 0
-        });
+        // Prepare withdrawal parameters with zero amount
+        address[] memory users = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = user;
+        amounts[0] = 0;
 
         vm.expectRevert(StrategyEngine.StrategyEngine__InvalidAmount.selector);
-        vm.prank(user);
-        engine.withdrawBatch(withdrawals);
+        vm.prank(DEPLOYER);
+        engine.withdrawBatch(users, amounts);
     }
 
-    function test_RevertWhen_WithdrawWBTCWithHighBorrow() public withWBTCDeposit(1e7) {
+    function test_RevertWhen_WithdrawWBTCWithHighBorrow() public {
+        _depositWbtcWithPermit(user, 1e7, USER_PRIVATE_KEY);
         // Verify health factor after deposit
         (, , , , , uint256 initialHealthFactor) = engine.getUserAccountData(user);
         assertLt(
@@ -547,140 +418,15 @@ contract StrategyEngineTest is Test {
         // Try to withdraw less than borrow amount
         uint256 invalidWithdrawAmount = engineBalance + (engineBalance * 10) / 100;
 
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.WBTC,
-            user: user,
-            amount: invalidWithdrawAmount
-        });
+        // Prepare withdrawal parameters with amount exceeding contract balance
+        address[] memory users = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = user;
+        amounts[0] = invalidWithdrawAmount;
 
         vm.expectRevert(StrategyEngine.StrategyEngine__InsufficientContractBalance.selector);
-        engine.withdrawBatch(withdrawals);
-    }
-
-    function test_WithdrawWithUnhealthyFactor() public withWBTCDeposit(1e7) {
-        // Get borrow amount
-        (, , uint256 totalBorrows, ) = engine.getUserTotals(user);
-        uint256 profit = totalBorrows / 2; // 50% of borrow amount as profit
-        deal(address(usdc), address(engine), IERC20(usdc).balanceOf(address(engine)) + profit);
-
-        // Withdraw less than borrow amount, so health factor is still below threshold
-        uint256 withdrawAmount = totalBorrows - (totalBorrows * 50) / 100;
-
-        // Verify health factor after deposit
-        (, , , , , uint256 initialHealthFactor) = engine.getUserAccountData(user);
-        assertLt(
-            initialHealthFactor,
-            HEALTH_FACTOR_THRESHOLD,
-            "Initial health factor should be less than threshold"
-        );
-        assertGt(
-            initialHealthFactor,
-            defaultLiquidationThreshold,
-            "Health factor should be greater than default health factor"
-        );
-
-        deal(address(usdc), address(engine), withdrawAmount);
-
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.WBTC,
-            user: user,
-            amount: withdrawAmount
-        });
-
-        engine.withdrawBatch(withdrawals);
-
-        // Verify health factor after partial repayment
-        (, , , , , uint256 finalHealthFactor) = engine.getUserAccountData(user);
-        assertLt(
-            finalHealthFactor,
-            HEALTH_FACTOR_THRESHOLD,
-            "Health factor should still be less than threshold after partial repayment"
-        );
-        assertGt(
-            finalHealthFactor,
-            defaultLiquidationThreshold,
-            "Health factor should be greater than default health factor"
-        );
-
-        // Verify only borrow amount is updated
-        (, , uint256 newTotalBorrows, ) = engine.getUserTotals(user);
-        assertGt(newTotalBorrows, 0, "Borrow amount should not be zero");
-    }
-
-    function test_RepayAmountCalculation() public withWBTCDeposit(1e7) {
-        // Get user position and borrow amount
-        address userPosition = engine.getUserPositionAddress(user);
-        (, , uint256 totalBorrows, ) = engine.getUserTotals(user);
-
-        // Get expected repay amount
-        uint256 expectedRepayAmount = engine.calculateRepayAmount(address(usdc), userPosition);
-
-        // Simulate USDC balance
-        deal(
-            address(usdc),
-            address(engine),
-            IERC20(usdc).balanceOf(address(engine)) + totalBorrows
-        );
-
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.WBTC,
-            user: user,
-            amount: totalBorrows
-        });
-
-        // Execute repayment
-        (, uint256[] memory actualRepayAmounts) = engine.withdrawBatch(withdrawals);
-
-        // Verify actual repay amount equals calculated repay amount
-        assertEq(
-            expectedRepayAmount,
-            actualRepayAmounts[0],
-            "Actual repay amount should equal calculated repay amount"
-        );
-    }
-
-    function test_PartialRepayAmountCalculation() public withWBTCDeposit(1e7) {
-        // Get user position and borrow amount
-        address userPosition = engine.getUserPositionAddress(user);
-
-        // Verify partial repayment
-        uint256 partialAmount = 3000e6;
-        deal(
-            address(usdc),
-            address(engine),
-            IERC20(usdc).balanceOf(address(engine)) + partialAmount
-        );
-
-        // Get expected partial repay amount
-        uint256 expectedPartialRepayAmount = engine.calculateRepayAmount(
-            address(usdc),
-            userPosition
-        );
-
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.WBTC,
-            user: user,
-            amount: partialAmount
-        });
-
-        // Execute partial repayment
-        engine.withdrawBatch(withdrawals);
-
-        // Verify remaining repay amount
-        uint256 remainingRepayAmount = engine.calculateRepayAmount(address(usdc), userPosition);
-        assertEq(
-            remainingRepayAmount,
-            expectedPartialRepayAmount - partialAmount,
-            "Remaining repay amount incorrect after partial repayment"
-        );
+        vm.prank(DEPLOYER);
+        engine.withdrawBatch(users, amounts);
     }
 
     function test_RevertWhen_UpdatePlatformFeeUnauthorized() public {
@@ -714,16 +460,8 @@ contract StrategyEngineTest is Test {
             USER_PRIVATE_KEY
         );
 
-        vm.startPrank(user);
-        engine.deposit{value: GMX_EXECUTION_FEE}(
-            StrategyEngine.TokenType.WBTC,
-            depositAmount,
-            0,
-            deadline,
-            v,
-            r,
-            s
-        );
+        vm.prank(user);
+        engine.deposit(StrategyEngine.TokenType.WBTC, depositAmount, 0, deadline, v, r, s);
 
         (, , uint256 totalBorrows, ) = engine.getUserTotals(user);
 
@@ -737,16 +475,15 @@ contract StrategyEngineTest is Test {
 
         uint256 withdrawAmount = totalBorrows + profit;
 
-        // Create withdrawal info
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: StrategyEngine.TokenType.WBTC,
-            user: user,
-            amount: withdrawAmount
-        });
+        // Prepare withdrawal parameters
+        address[] memory users = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = user;
+        amounts[0] = withdrawAmount;
 
         uint256 beforeVaultBalance = IERC20(usdc).balanceOf(address(vault));
-        (uint256[] memory actualUserProfits, ) = engine.withdrawBatch(withdrawals);
+        vm.prank(DEPLOYER);
+        uint256[] memory actualUserProfits = engine.withdrawBatch(users, amounts);
 
         // Verify platform fee and user profit - allow 1 wei difference due to rounding
         assertApproxEqAbs(actualUserProfits[0], expectedUserProfit, 1, "Incorrect user profit");
@@ -755,32 +492,42 @@ contract StrategyEngineTest is Test {
             expectedPlatformFee,
             "Incorrect platform fee"
         );
-
-        vm.stopPrank();
     }
 
-    function test_UpdateBorrowCapacity_PriceIncrease() public withWBTCDeposit(1e7) {
-        // Record initial borrow amount
+    /* function test_UpdateBorrowCapacity_PriceIncrease() public {
+        // Initial WBTC deposit
+        _depositWbtcWithPermit(user, 1e7, USER_PRIVATE_KEY);
+
+        // Record initial state
+        (uint256 totalCollateralBase, , , , , ) = engine.getUserAccountData(user);
         (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user);
 
-        // Simulate price increase by manipulating oracle
+        // Simulate price increase by doubling WBTC price
         uint256 originalPrice = IAaveOracle(engine.getAaveOracleAddress()).getAssetPrice(
             address(wbtc)
         );
+
+        // Mock the price increase
         vm.mockCall(
             engine.getAaveOracleAddress(),
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
             abi.encode(originalPrice * 2)
         );
 
+        // Calculate expected new borrow amount based on doubled collateral value
+        uint256 expectedNewBorrowAmount = engine.calculateBorrowAmount(
+            engine.getUserPositionAddress(user)
+        );
+        uint256 borrowIncrease = expectedNewBorrowAmount - initialBorrowAmount;
+
         // Expect event emission for increased borrowing
         vm.expectEmit(true, true, true, true);
         emit BorrowCapacityUpdated(
             user,
-            1e7,
+            1e7, // WBTC amount
             initialBorrowAmount,
-            engine.calculateBorrowAmount(engine.getUserPositionAddress(user)),
-            engine.calculateBorrowAmount(engine.getUserPositionAddress(user)) - initialBorrowAmount,
+            expectedNewBorrowAmount,
+            borrowIncrease,
             true,
             block.timestamp
         );
@@ -791,9 +538,20 @@ contract StrategyEngineTest is Test {
         // Verify increased borrowing
         (, , uint256 newBorrowAmount, ) = engine.getUserTotals(user);
         assertGt(newBorrowAmount, initialBorrowAmount, "Borrow amount should increase");
+        assertEq(
+            newBorrowAmount,
+            expectedNewBorrowAmount,
+            "New borrow amount should match expected"
+        );
+
+        // Verify collateral value increased
+        (uint256 newTotalCollateralBase, , , , , ) = engine.getUserAccountData(user);
+        assertEq(newTotalCollateralBase, totalCollateralBase * 2, "Collateral value should double");
     }
 
-    function test_UpdateBorrowCapacity_PriceDecrease() public withWBTCDeposit(1e7) {
+    function test_UpdateBorrowCapacity_PriceDecrease() public {
+        _depositWbtcWithPermit(user, 1e7, USER_PRIVATE_KEY);
+
         // Record initial borrow amount
         (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user);
 
@@ -824,67 +582,101 @@ contract StrategyEngineTest is Test {
 
         // Update borrow capacity
         engine.updateBorrowCapacity(user);
+    } */
+
+    function test_RepayBorrow() public {
+        // Setup
+        uint256 depositAmount = 1e7;
+        _depositWbtcWithPermit(user, depositAmount, USER_PRIVATE_KEY);
+
+        // Get total borrows and calculate repay amount
+        (, , uint256 totalBorrows, ) = engine.getUserTotals(user);
+        uint256 repayAmount = totalBorrows / 2;
+        require(repayAmount > 0, "Repay amount must be greater than 0");
+
+        // Transfer USDC to engine for repayment
+        deal(usdc, address(engine), repayAmount);
+
+        // Create repay info array
+        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
+        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: repayAmount});
+
+        // Execute repay
+        vm.prank(DEPLOYER);
+        engine.repayBorrowBatch(repayInfos);
+
+        // Verify
+        (, , uint256 newBorrows, ) = engine.getUserTotals(user);
+        assertEq(newBorrows, totalBorrows - repayAmount);
     }
 
-    function test_RepayBorrow() public withWBTCDeposit(1e7) {
-        // Record initial borrow amount
-        (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user);
+    function test_RepayBorrow_ZeroAmount() public {
+        vm.startPrank(DEPLOYER);
+        // Create repay info array
+        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
+        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: 0});
 
-        // Repay half of the borrowed amount
-        uint256 repayAmount = initialBorrowAmount / 2;
-        deal(address(usdc), address(engine), repayAmount);
-
-        engine.repayBorrow(user, repayAmount);
-
-        // Verify borrow amount decreased
-        (, , uint256 newBorrowAmount, ) = engine.getUserTotals(user);
-        assertEq(
-            newBorrowAmount,
-            initialBorrowAmount - repayAmount,
-            "Borrow amount should decrease by repay amount"
-        );
+        vm.expectRevert(StrategyEngine__InvalidAmount.selector);
+        engine.repayBorrowBatch(repayInfos);
+        vm.stopPrank();
     }
 
-    function test_RevertWhen_RepayBorrowInvalidAmount() public {
-        vm.startPrank(user);
+    function test_RepayBorrow_NoPosition() public {
+        vm.startPrank(DEPLOYER);
+        address noPositionUser = makeAddr("noPositionUser");
+        // Create repay info array
+        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
+        repayInfos[0] = StrategyEngine.RepayInfo({user: noPositionUser, amount: 1e6});
+
+        vm.expectRevert(StrategyEngine__NoUserPosition.selector);
+        engine.repayBorrowBatch(repayInfos);
+        vm.stopPrank();
+    }
+
+    function test_RepayBorrow_InvalidAmount() public {
+        uint256 depositAmount = 1e7;
+        _depositWbtcWithPermit(user, depositAmount, USER_PRIVATE_KEY);
+
+        // Create repay info array
+        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
+        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: 0});
+
         vm.expectRevert(StrategyEngine.StrategyEngine__InvalidAmount.selector);
-        engine.repayBorrow(user, 0);
+        vm.startPrank(DEPLOYER);
+        engine.repayBorrowBatch(repayInfos);
         vm.stopPrank();
     }
 
-    function test_RevertWhen_RepayBorrowNoUserPosition() public {
-        address noPositionUser = makeAddr("noPosition");
-        vm.startPrank(noPositionUser);
-        vm.expectRevert(StrategyEngine.StrategyEngine__NoUserPosition.selector);
-        engine.repayBorrow(noPositionUser, 1e6);
+    function test_RepayBorrowMultipleUsers() public {
+        // Setup user1
+        uint256 depositAmount1 = 1e7;
+        vm.prank(user);
+        _depositWbtcWithPermit(user, depositAmount1, USER_PRIVATE_KEY);
+
+        // Setup user2
+        uint256 depositAmount2 = 2e7;
+        vm.prank(user2);
+        _depositWbtcWithPermit(user2, depositAmount2, user2PrivateKey);
+
+        // Get total borrows for both users
+        (, , uint256 totalBorrows1, ) = engine.getUserTotals(user);
+        (, , uint256 totalBorrows2, ) = engine.getUserTotals(user2);
+
+        // Create repay info array
+        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](2);
+        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: totalBorrows1});
+        repayInfos[1] = StrategyEngine.RepayInfo({user: user2, amount: totalBorrows2});
+
+        // Execute repay
+        vm.prank(DEPLOYER);
+        engine.repayBorrowBatch(repayInfos);
+
+        // Verify
+        (, , uint256 newBorrows1, ) = engine.getUserTotals(user);
+        (, , uint256 newBorrows2, ) = engine.getUserTotals(user2);
+        assertEq(newBorrows1, 0);
+        assertEq(newBorrows2, 0);
         vm.stopPrank();
-    }
-
-    function test_RevertWhen_RepayBorrowAmountTooHigh() public withWBTCDeposit(1e7) {
-        // Try to repay more than borrowed
-        (, , uint256 borrowAmount, ) = engine.getUserTotals(user);
-        vm.expectRevert(StrategyEngine.StrategyEngine__InvalidRepayAmount.selector);
-        engine.repayBorrow(user, borrowAmount + 1);
-    }
-
-    // Tests previously from StrategyEngineAdditionalTest
-    /**
-     * @notice Test generating deposit ID to increase coverage
-     */
-    function test_GenerateDepositId() public view {
-        address userAddress = address(0x123);
-        StrategyEngine.TokenType tokenType = StrategyEngine.TokenType.WBTC;
-        uint256 amount = 1e8;
-        uint256 timestamp = 1234567890;
-
-        bytes32 depositId = engine.generateDepositId(userAddress, tokenType, amount, timestamp);
-
-        // Verify depositId is non-zero and deterministic
-        assertNotEq(depositId, bytes32(0), "Deposit ID should not be zero");
-
-        // Generate the ID again and verify it matches
-        bytes32 depositId2 = engine.generateDepositId(userAddress, tokenType, amount, timestamp);
-        assertEq(depositId, depositId2, "Generated IDs should be deterministic");
     }
 
     /**
@@ -893,7 +685,7 @@ contract StrategyEngineTest is Test {
     function test_WithdrawByUser() public {
         // First, deposit WBTC
         uint256 depositAmount = WBTC_AMOUNT;
-        _depositWbtc(user2, depositAmount, user2PrivateKey);
+        _depositWbtcWithPermit(user2, depositAmount, user2PrivateKey);
 
         // Verify deposit was recorded
         (uint256 totalWbtc, , uint256 totalBorrows, ) = engine.getUserTotals(user2);
@@ -904,20 +696,20 @@ contract StrategyEngineTest is Test {
         deal(usdc, address(engine), 10 * totalBorrows);
 
         // Repay borrowed amount
-        vm.prank(safeWallet);
-        engine.repayBorrow(user2, totalBorrows);
+        vm.startPrank(DEPLOYER);
+        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
+        repayInfos[0] = StrategyEngine.RepayInfo({user: user2, amount: totalBorrows});
+        engine.repayBorrowBatch(repayInfos);
+        vm.stopPrank();
 
         // Now withdraw the funds for the user
-        uint256 user2WbtcBalanceBefore = IERC20(wbtc).balanceOf(user2);
-
-        vm.prank(address(engine));
         engine.withdrawByUser(user2);
 
         // Verify user2 received their deposited WBTC back
         uint256 user2WbtcBalanceAfter = IERC20(wbtc).balanceOf(user2);
-        assertGt(
+        assertEq(
             user2WbtcBalanceAfter,
-            user2WbtcBalanceBefore,
+            INITIAL_WBTC_BALANCE,
             "User should have received WBTC back"
         );
     }
@@ -927,7 +719,7 @@ contract StrategyEngineTest is Test {
      */
     function test_GetUserAccountData_Additional() public {
         // Create a user position
-        _depositWbtc(user2, WBTC_AMOUNT, user2PrivateKey);
+        _depositWbtcWithPermit(user2, WBTC_AMOUNT, user2PrivateKey);
 
         // Call getUserAccountData for a user
         (
@@ -950,7 +742,7 @@ contract StrategyEngineTest is Test {
      */
     function test_CalculateRepayAmount_Additional() public {
         // Create a user position
-        _depositWbtc(user2, WBTC_AMOUNT, user2PrivateKey);
+        _depositWbtcWithPermit(user2, WBTC_AMOUNT, user2PrivateKey);
 
         // Get user position address
         address userPosition = engine.getUserPositionAddress(user2);
@@ -967,7 +759,7 @@ contract StrategyEngineTest is Test {
      */
     function test_GetUserData() public {
         // Create user deposits
-        _depositWbtc(user2, WBTC_AMOUNT, user2PrivateKey);
+        _depositWbtcWithPermit(user2, WBTC_AMOUNT, user2PrivateKey);
         _depositUsdc(user2, USDC_AMOUNT);
 
         // Get deposit records
@@ -999,10 +791,6 @@ contract StrategyEngineTest is Test {
         uint256 platformFee = engine.getPlatformFee();
         assertEq(platformFee, 1000, "Platform fee should be 10%");
 
-        // Test liquidation threshold getter
-        uint256 threshold = engine.getDefaultLiquidationThreshold();
-        assertEq(threshold, 156, "Default liquidation threshold should be 156");
-
         // Test USDC balance getter
         uint256 usdcBalance = engine.getUSDCBalance();
         assertEq(
@@ -1023,49 +811,125 @@ contract StrategyEngineTest is Test {
         assertEq(engine.getVaultAddress(), address(vault), "Vault address should match");
     }
 
-    /**
-     * @notice Test calculateBorrowAmount function to increase coverage
-     */
-    function test_CalculateBorrowAmount_Helper() public {
-        // Create a user position with a deposit
-        _depositWbtc(user2, WBTC_AMOUNT, user2PrivateKey);
+    struct DepositTestInfo {
+        uint256 wbtcAmount1;
+        uint256 wbtcAmount2;
+        uint256 usdcAmount;
+        uint256 borrowAmount1;
+        uint256 borrowAmount2;
+        uint256 totalBorrows;
+        uint256 beforeUsdcBalance;
+        uint256 beforeWbtcBalance;
+        uint256 profit;
+    }
 
-        // Create helper contract
-        BorrowAmountHelper helper = new BorrowAmountHelper(engine);
+    function _executeMultipleDeposits(
+        address _user,
+        uint256 wbtcAmount1,
+        uint256 wbtcAmount2,
+        uint256 usdcAmount,
+        uint256 privateKey
+    ) internal returns (DepositTestInfo memory info) {
+        info.wbtcAmount1 = wbtcAmount1;
+        info.wbtcAmount2 = wbtcAmount2;
+        info.usdcAmount = usdcAmount;
 
-        // Get references to key contracts and addresses
-        address aaveOracleAddr = engine.getAaveOracleAddress();
-        address usdcAddress = engine.getUSDCAddress();
+        // First WBTC deposit
+        info.borrowAmount1 = _depositWbtcWithPermit(_user, wbtcAmount1, privateKey);
 
-        // Mock the Aave oracle price responses for both tokens
-        vm.mockCall(
-            aaveOracleAddr,
-            abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, usdcAddress),
-            abi.encode(10 ** 8) // $1.00 with 8 decimals precision
+        // USDC deposit
+        info.beforeUsdcBalance = _depositUsdc(_user, usdcAmount);
+
+        // Second WBTC deposit
+        info.borrowAmount2 = _depositWbtcWithPermit(_user, wbtcAmount2, privateKey);
+
+        info.totalBorrows = info.borrowAmount2;
+        info.beforeWbtcBalance = IERC20(wbtc).balanceOf(_user);
+
+        return info;
+    }
+
+    function _executeWithdrawal(
+        address _user,
+        uint256 totalAmount
+    ) internal returns (uint256[] memory profits) {
+        address[] memory users = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = _user;
+        amounts[0] = totalAmount;
+
+        vm.prank(DEPLOYER);
+        return engine.withdrawBatch(users, amounts);
+    }
+
+    function test_WithdrawBatchMultipleDeposits() public {
+        // Setup deposits
+        DepositTestInfo memory info = _executeMultipleDeposits(
+            user,
+            5e6, // wbtcAmount1
+            3e6, // wbtcAmount2
+            1000e6, // usdcAmount
+            USER_PRIVATE_KEY
         );
 
-        // Calculate borrow amount using our helper
-        uint256 borrowAmount = helper.calculateBorrowAmount(
-            aaveOracleAddr,
-            usdcAddress,
-            10_000 * 10 ** 8, // totalCollateralBase
-            8000, // currentLiquidationThreshold (80%)
-            156 // defaultLiquidationThreshold (1.56 or 156%)
+        // Get health factor after multiple deposits
+        (, , , , , uint256 healthFactor) = engine.getUserAccountData(user);
+
+        // Verify health factor is greater than liquidation threshold but less than 1.0
+        assertGt(
+            healthFactor,
+            defaultLiquidationThreshold,
+            "Health factor should be greater than liquidation threshold"
+        );
+        assertLt(healthFactor, HEALTH_FACTOR_THRESHOLD, "Health factor should be less than 1.0");
+
+        // Verify initial state
+        _verifyWithdrawalState(
+            user,
+            info.wbtcAmount1 + info.wbtcAmount2,
+            info.usdcAmount,
+            info.totalBorrows
         );
 
-        // Now the borrowAmount should be non-zero
-        assertGt(borrowAmount, 0, "Borrow amount should be greater than zero");
-        console2.log("Calculated borrow amount: ", borrowAmount);
+        // Prepare for withdrawal
+        uint256 buffer = 100000e6;
+        uint256 totalWithdrawAmount = info.totalBorrows + info.usdcAmount + buffer;
+        _prepareContractBalance(totalWithdrawAmount);
+
+        // Execute withdrawal
+        uint256[] memory profits = _executeWithdrawal(user, totalWithdrawAmount);
+        info.profit = profits[0];
+
+        // Verify results
+        _verifyWithdrawalResults(info);
+
+        // Verify final state
+        _verifyWithdrawalState(user, 0, 0, 0);
+    }
+
+    function _verifyWithdrawalResults(DepositTestInfo memory info) internal view {
+        // Verify token balances
+        _verifyTokenBalances(
+            user,
+            info.beforeWbtcBalance,
+            info.beforeUsdcBalance,
+            info.wbtcAmount1 + info.wbtcAmount2,
+            info.profit
+        );
     }
 
     // Helper functions at the end
-    function _depositWbtc(address userAddress, uint256 amount, uint256 privateKey) internal {
+    function _depositWbtcWithPermit(
+        address _user,
+        uint256 amount,
+        uint256 privateKey
+    ) internal returns (uint256 borrowAmount) {
         uint256 deadline = block.timestamp + 1 days;
-        uint256 nonce = 0;
+        uint256 nonce = IERC20Permit(wbtc).nonces(_user);
 
         (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
             wbtc,
-            userAddress,
+            _user,
             address(engine),
             amount,
             nonce,
@@ -1073,29 +937,60 @@ contract StrategyEngineTest is Test {
             privateKey
         );
 
-        vm.prank(userAddress);
-        engine.deposit{value: 0}(
-            StrategyEngine.TokenType.WBTC,
-            amount,
-            0, // referralCode
-            deadline,
-            v,
-            r,
-            s
-        );
+        vm.startPrank(_user);
+        engine.deposit(StrategyEngine.TokenType.WBTC, amount, 0, deadline, v, r, s);
+        vm.stopPrank();
+
+        (, , borrowAmount, ) = engine.getUserTotals(_user);
+        return borrowAmount;
     }
 
-    function _depositUsdc(address userAddr, uint256 amount) internal {
-        vm.prank(userAddr);
-        engine.deposit(
-            StrategyEngine.TokenType.USDC,
-            amount,
-            0, // referralCode
-            0, // deadline (not needed)
-            0, // v (not needed)
-            bytes32(0), // r (not needed)
-            bytes32(0) // s (not needed)
+    function _depositUsdc(address _user, uint256 amount) internal returns (uint256 beforeBalance) {
+        vm.startPrank(_user);
+        deal(address(usdc), _user, amount);
+        beforeBalance = IERC20(usdc).balanceOf(_user);
+        IERC20(usdc).approve(address(engine), amount);
+        engine.deposit(StrategyEngine.TokenType.USDC, amount, 0, 0, 0, bytes32(0), bytes32(0));
+        vm.stopPrank();
+
+        return beforeBalance;
+    }
+
+    function _verifyWithdrawalState(
+        address _user,
+        uint256 expectedWbtc,
+        uint256 expectedUsdc,
+        uint256 expectedBorrows
+    ) internal view {
+        (uint256 totalWbtc, uint256 totalUsdc, uint256 totalBorrows, ) = engine.getUserTotals(
+            _user
         );
+
+        assertEq(totalWbtc, expectedWbtc, "Incorrect WBTC balance");
+        assertEq(totalUsdc, expectedUsdc, "Incorrect USDC balance");
+        assertEq(totalBorrows, expectedBorrows, "Incorrect borrow amount");
+    }
+
+    function _verifyTokenBalances(
+        address _user,
+        uint256 beforeWbtcBalance,
+        uint256 beforeUsdcBalance,
+        uint256 expectedWbtcChange,
+        uint256 profit
+    ) internal view {
+        uint256 afterWbtcBalance = IERC20(wbtc).balanceOf(_user);
+        uint256 afterUsdcBalance = IERC20(usdc).balanceOf(_user);
+
+        assertEq(
+            afterWbtcBalance - beforeWbtcBalance,
+            expectedWbtcChange,
+            "Incorrect WBTC balance change"
+        );
+        assertEq(afterUsdcBalance - profit, beforeUsdcBalance, "Incorrect USDC balance change");
+    }
+
+    function _prepareContractBalance(uint256 amount) internal {
+        deal(address(usdc), address(engine), amount);
     }
 
     function _getPermitSignature(

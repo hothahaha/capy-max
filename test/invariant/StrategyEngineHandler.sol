@@ -13,7 +13,12 @@ contract StrategyEngineHandler is Test {
     address public wbtc;
     address public usdc;
     address public aaveOracle;
-    address public deployer;
+    uint256 public deployerKey;
+
+    address public DEPLOYER;
+    address public user1;
+    address public user2;
+    address public user3;
 
     address[] public users;
     mapping(address => uint256) public userPrivateKeys;
@@ -27,13 +32,14 @@ contract StrategyEngineHandler is Test {
         address _wbtc,
         address _usdc,
         address _aaveOracle,
-        address _deployer
+        uint256 _deployerKey
     ) {
         engine = StrategyEngine(_engine);
         wbtc = _wbtc;
         usdc = _usdc;
         aaveOracle = _aaveOracle;
-        deployer = _deployer;
+        deployerKey = _deployerKey;
+        DEPLOYER = vm.addr(deployerKey);
 
         // Initialize users array
         users = new address[](MAX_USERS);
@@ -158,19 +164,13 @@ contract StrategyEngineHandler is Test {
         if (maxWithdraw == 0) return;
         amount = bound(amount, 1, maxWithdraw);
 
-        // Create withdrawal info array
-        StrategyEngine.WithdrawalInfo[] memory withdrawals = new StrategyEngine.WithdrawalInfo[](1);
-        withdrawals[0] = StrategyEngine.WithdrawalInfo({
-            tokenType: tokenType,
-            user: user,
-            amount: amount
-        });
+        // Prepare withdrawal parameters
+        uint256[] memory amounts = new uint256[](1);
+        users[0] = user;
+        amounts[0] = amount;
 
-        vm.prank(user);
-        try engine.withdrawBatch(withdrawals) returns (
-            uint256[] memory userProfits,
-            uint256[] memory /* repayAmounts */
-        ) {
+        vm.prank(DEPLOYER);
+        try engine.withdrawBatch(users, amounts) returns (uint256[] memory userProfits) {
             // Record total profit
             if (userProfits.length > 0) {
                 totalProfit += userProfits[0];
@@ -212,7 +212,7 @@ contract StrategyEngineHandler is Test {
         // Constraint fee in a valid range (0-100%)
         newFee = bound(newFee, 0, 10000);
 
-        vm.prank(deployer);
+        vm.prank(DEPLOYER);
         try engine.updatePlatformFee(newFee) {} catch {}
     }
 

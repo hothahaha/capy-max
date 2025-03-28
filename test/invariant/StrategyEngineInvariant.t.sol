@@ -42,7 +42,7 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
         deployer = vm.addr(deployerKey);
 
         // Deploy handler contract
-        handler = new StrategyEngineHandler(address(engine), wbtc, usdc, aaveOracle, deployer);
+        handler = new StrategyEngineHandler(address(engine), wbtc, usdc, aaveOracle, deployerKey);
 
         // Assign tokens to handler contract
         deal(wbtc, address(handler), 1_000_000e8);
