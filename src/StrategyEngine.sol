@@ -84,12 +84,12 @@ contract StrategyEngine is
     //--------------------------------------------------------------------------
 
     // Constants
-    uint256 private immutable BASIS_POINTS = 10000; // 100%
+    uint256 public constant BASIS_POINTS = 10000; // 100%
     uint256 public immutable BATCH_SIZE = 10;
 
     // Core state variables
     uint256 private platformFeePercentage;
-    uint256 private defaultLiquidationThreshold;
+    uint256 public defaultLiquidationThreshold;
     bytes32 private solanaAddress;
     address private safeWallet;
 
@@ -118,14 +118,6 @@ contract StrategyEngine is
     uint256 private lastHealthCheckTimestamp;
     uint256 public currentBatchIndex;
 
-    // Simplified events
-    event BorrowCapacityUpdated(
-        address indexed user,
-        uint256 originalAmount,
-        uint256 newAmount,
-        bool isIncrease
-    );
-
     //--------------------------------------------------------------------------
     // Events
     //--------------------------------------------------------------------------
@@ -148,7 +140,8 @@ contract StrategyEngine is
         uint256 newBorrowAmount,
         uint256 difference,
         bool isIncrease,
-        uint256 timestamp
+        uint256 timestamp,
+        uint256 healthFactor
     );
 
     //--------------------------------------------------------------------------
@@ -385,6 +378,8 @@ contract StrategyEngine is
             state.info.totalBorrowAmount -= actualRepayAmount;
         }
 
+        (, , , , , uint256 healthFactor) = _getUserAccountData(userPosition);
+
         emit BorrowCapacityUpdated(
             user,
             state.info.totalWbtcDeposited,
@@ -392,7 +387,8 @@ contract StrategyEngine is
             state.info.totalBorrowAmount,
             actualRepayAmount,
             false,
-            block.timestamp
+            block.timestamp,
+            healthFactor
         );
 
         return actualRepayAmount;
@@ -401,7 +397,8 @@ contract StrategyEngine is
     /**
      * @notice Withdraw funds for a user
      */
-    function withdrawByUser(address user) external nonReentrant {
+    function withdrawByUser() external nonReentrant {
+        address user = msg.sender;
         RepayState storage state = userStates[user].repayState;
         if (!state.hasRepaid) revert StrategyEngine__NoDeposit();
 
@@ -737,6 +734,8 @@ contract StrategyEngine is
             // Update user info
             state.info.totalBorrowAmount = newBorrowAmount;
 
+            (, , , , , uint256 healthFactor) = _getUserAccountData(userPosition);
+
             emit BorrowCapacityUpdated(
                 user,
                 currentWbtc,
@@ -744,11 +743,14 @@ contract StrategyEngine is
                 newBorrowAmount,
                 additionalBorrow,
                 true,
-                block.timestamp
+                block.timestamp,
+                healthFactor
             );
         } else if (newBorrowAmount < currentBorrowAmount) {
             // Need to repay
             uint256 repayAmount = currentBorrowAmount - newBorrowAmount;
+
+            (, , , , , uint256 healthFactor) = _getUserAccountData(userPosition);
 
             emit BorrowCapacityUpdated(
                 user,
@@ -757,7 +759,8 @@ contract StrategyEngine is
                 newBorrowAmount,
                 repayAmount,
                 false,
-                block.timestamp
+                block.timestamp,
+                healthFactor
             );
         }
     }

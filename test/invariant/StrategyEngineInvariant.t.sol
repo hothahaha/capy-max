@@ -51,10 +51,6 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
         // Set target for invariant tests
         targetContract(address(handler));
 
-        // Set smaller call sequence length and depth
-        vm.setEnv("FOUNDRY_INVARIANT_RUNS", "10");
-        vm.setEnv("FOUNDRY_INVARIANT_DEPTH", "10");
-
         // Enable RPC cache for better performance in fork mode
         vm.setEnv("FOUNDRY_RPC_CACHE", "true");
 

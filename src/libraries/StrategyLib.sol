@@ -255,7 +255,7 @@ library StrategyLib {
         );
 
         usdc.approve(address(this), borrowAmount);
-        usdc.transferFrom(userPosition, address(this), borrowAmount);
+        usdc.safeTransferFrom (userPosition, address(this), borrowAmount);
 
         return borrowAmount;
     }
