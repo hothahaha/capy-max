@@ -57,6 +57,7 @@ contract HelperConfig is Script {
 
     // Safe
     address public constant ARBITRUM_SAFE = 0xC05e565c0BD64C95C0Bc4891FC5A3735fe5b139e;
+    address public constant ARBITRUM_SEPOLIA_SAFE = 0x41675C099F32341bf84BFc5382aF534df5C7461a;
     address public constant SEPOLIA_SAFE = 0xC05e565c0BD64C95C0Bc4891FC5A3735fe5b139e;
 
     NetworkConfig public activeNetworkConfig;
@@ -121,7 +122,7 @@ contract HelperConfig is Script {
                 aaveOracle: TESTNET_AAVE_V3_ARBITRUM_ORACLE,
                 aaveProtocolDataProvider: TESTNET_AAVE_V3_ARBITRUM_PROTOCOL_DATA_PROVIDER,
                 deployerKey: vm.envUint("TESTNET_PRIVATE_KEY"),
-                safe: SEPOLIA_SAFE
+                safe: ARBITRUM_SEPOLIA_SAFE
             });
     }
 }

@@ -239,8 +239,9 @@ contract StrategyEngineIntegrationTest is Test {
         // Now withdraw the funds for the user
         uint256 user2WbtcBalanceBefore = IERC20(wbtc).balanceOf(user2);
 
-        vm.prank(address(engine));
-        engine.withdrawByUser(user2);
+        vm.startPrank(user2);
+        engine.withdrawByUser();
+        vm.stopPrank();
 
         // Verify user2 received their deposited WBTC back
         uint256 user2WbtcBalanceAfter = IERC20(wbtc).balanceOf(user2);

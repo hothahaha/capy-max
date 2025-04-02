@@ -4,6 +4,8 @@ pragma solidity ^0.8.20;
 interface ISafe {
     function getOwners() external view returns (address[] memory);
 
+    function getThreshold() external view returns (uint256);
+
     function getNonce() external view returns (uint256);
 
     function getTransactionHash(
