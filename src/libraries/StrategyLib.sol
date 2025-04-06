@@ -7,7 +7,6 @@ import {IAaveOracle} from "../interfaces/aave/IAaveOracle.sol";
 import {IPoolDataProvider} from "../interfaces/aave/IAaveProtocolDataProvider.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ICpToken} from "../interfaces/ICpToken.sol";
-import {console} from "forge-std/console.sol";
 import {IAavePool} from "../interfaces/aave/IAavePool.sol";
 import {UserPosition} from "../UserPosition.sol";
 
@@ -255,7 +254,7 @@ library StrategyLib {
         );
 
         usdc.approve(address(this), borrowAmount);
-        usdc.safeTransferFrom (userPosition, address(this), borrowAmount);
+        usdc.safeTransferFrom(userPosition, address(this), borrowAmount);
 
         return borrowAmount;
     }

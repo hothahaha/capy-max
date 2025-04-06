@@ -1,22 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {console2} from "forge-std/console2.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeableBase} from "./upgradeable/UUPSUpgradeableBase.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IAavePool} from "./interfaces/aave/IAavePool.sol";
 import {IAaveOracle} from "./interfaces/aave/IAaveOracle.sol";
 import {IPoolDataProvider} from "./interfaces/aave/IAaveProtocolDataProvider.sol";
-import {ITokenMessenger} from "./interfaces/cctp/ITokenMessenger.sol";
 import {CpToken} from "./tokens/CpToken.sol";
 import {Vault} from "./vault/Vault.sol";
 import {UserPosition} from "./UserPosition.sol";
