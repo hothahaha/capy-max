@@ -238,7 +238,7 @@ contract StrategyEngine is
         if (tokenType == TokenType.WBTC) {
             _handleWbtcDeposit(amount, referralCode, deadline, v, r, s);
         } else {
-            _handleUsdcDeposit(amount);
+            _handleUsdcDeposit(amount, deadline, v, r, s);
         }
     }
 
@@ -820,9 +820,18 @@ contract StrategyEngine is
     /**
      * @notice Handle USDC deposit
      */
-    function _handleUsdcDeposit(uint256 amount) internal {
+    function _handleUsdcDeposit(
+        uint256 amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) internal {
+        // Use permit to authorize
+        IERC20Permit(address(usdc)).permit(msg.sender, address(this), amount, deadline, v, r, s);
+
         // Transfer USDC
-        StrategyLib.transferUsdc(usdc, msg.sender, address(this), amount);
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
 
         // Update user information
         _updateUserInfo(msg.sender, TokenType.USDC, amount, 0);

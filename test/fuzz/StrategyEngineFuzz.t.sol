@@ -37,6 +37,8 @@ contract StrategyEngineFuzzTest is Test {
     uint256 public user2PrivateKey;
     uint256 public user3PrivateKey;
 
+    mapping(address => uint256) public userPrivateKeys;
+
     function setUp() public {
         // Deploy contracts
         DeployScript deployScript = new DeployScript();
@@ -75,6 +77,10 @@ contract StrategyEngineFuzzTest is Test {
         IERC20(wbtc).approve(address(engine), type(uint256).max);
         IERC20(usdc).approve(address(engine), type(uint256).max);
         vm.stopPrank();
+
+        userPrivateKeys[user1] = user1PrivateKey;
+        userPrivateKeys[user2] = user2PrivateKey;
+        userPrivateKeys[user3] = user3PrivateKey;
     }
 
     // Helper function: Generate valid signature
@@ -131,16 +137,20 @@ contract StrategyEngineFuzzTest is Test {
 
     // Helper function: Execute USDC deposit
     function _depositUsdc(address user, uint256 amount) internal {
-        vm.prank(user);
-        engine.deposit(
-            StrategyEngine.TokenType.USDC,
+        vm.startPrank(user);
+        uint256 deadline = block.timestamp + 1 days;
+        uint256 nonce = IERC20Permit(usdc).nonces(user);
+        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
+            usdc,
+            user,
+            address(engine),
             amount,
-            0, // referralCode
-            0, // deadline (not needed)
-            0, // v (not needed)
-            bytes32(0), // r (not needed)
-            bytes32(0) // s (not needed)
+            nonce,
+            deadline,
+            userPrivateKeys[user]
         );
+        engine.deposit(StrategyEngine.TokenType.USDC, amount, 0, deadline, v, r, s);
+        vm.stopPrank();
     }
 
     // Fuzz test: WBTC deposit amount

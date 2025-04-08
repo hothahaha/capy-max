@@ -133,6 +133,18 @@ contract StrategyEngineIntegrationTest is Test {
     // Test USDC deposit process
     function testUsdcDeposit() public {
         uint256 initialUsdcBalance = IERC20(usdc).balanceOf(user2);
+        uint256 deadline = block.timestamp + 1 days;
+
+        // Get permit signature
+        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
+            usdc,
+            user2,
+            address(engine),
+            USDC_AMOUNT,
+            IERC20Permit(usdc).nonces(user2),
+            deadline,
+            user2PrivateKey
+        );
 
         // Execute deposit
         vm.prank(user2);
@@ -140,10 +152,10 @@ contract StrategyEngineIntegrationTest is Test {
             StrategyEngine.TokenType.USDC,
             USDC_AMOUNT,
             0, // referralCode
-            0, // deadline (not needed)
-            0, // v (not needed)
-            bytes32(0), // r (not needed)
-            bytes32(0) // s (not needed)
+            deadline,
+            v,
+            r,
+            s
         );
 
         // Verify user information has been updated
@@ -178,8 +190,19 @@ contract StrategyEngineIntegrationTest is Test {
         engine.deposit(StrategyEngine.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
 
         // User 2 deposits USDC
+        uint256 nonce2 = IERC20Permit(usdc).nonces(user2);
+        (v, r, s) = _getPermitSignature(
+            usdc,
+            user2,
+            address(engine),
+            USDC_AMOUNT,
+            nonce2,
+            deadline,
+            user2PrivateKey
+        );
+
         vm.prank(user2);
-        engine.deposit(StrategyEngine.TokenType.USDC, USDC_AMOUNT, 0, 0, 0, bytes32(0), bytes32(0));
+        engine.deposit(StrategyEngine.TokenType.USDC, USDC_AMOUNT, 0, deadline, v, r, s);
 
         // User 3 deposits WBTC
         uint256 nonce3 = IERC20Permit(wbtc).nonces(user3);

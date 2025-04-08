@@ -27,6 +27,17 @@ contract StrategyEngineHandler is Test {
 
     uint256 public constant MAX_USERS = 20;
 
+    // Struct to hold deposit parameters
+    struct DepositParams {
+        address user;
+        uint256 amount;
+        uint256 deadline;
+        uint256 nonce;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+    }
+
     constructor(
         address _engine,
         address _wbtc,
@@ -70,6 +81,55 @@ contract StrategyEngineHandler is Test {
         }
     }
 
+    // Helper function to prepare deposit parameters
+    function _prepareDepositParams(
+        address user,
+        uint256 amount
+    ) internal view returns (DepositParams memory params) {
+        params.user = user;
+        params.amount = amount;
+        params.deadline = block.timestamp + 1 days;
+        params.nonce = IERC20Permit(usdc).nonces(user);
+        (params.v, params.r, params.s) = _getPermitSignature(
+            usdc,
+            user,
+            address(engine),
+            amount,
+            params.nonce,
+            params.deadline,
+            userPrivateKeys[user]
+        );
+        return params;
+    }
+
+    // Deposit USDC
+    function depositUsdc(uint256 userSeed, uint256 amount) public {
+        uint256 index = userSeed % MAX_USERS;
+        address user = users[index];
+        if (user == address(0)) return;
+
+        // Constraint amount in a reasonable range
+        uint256 userBalance = IERC20(usdc).balanceOf(user);
+        amount = bound(amount, 1, userBalance < 1000e6 ? userBalance : 1000e6);
+
+        // Prepare deposit parameters
+        DepositParams memory params = _prepareDepositParams(user, amount);
+
+        // Execute deposit
+        vm.prank(user);
+        try
+            engine.deposit(
+                StrategyEngine.TokenType.USDC,
+                params.amount,
+                0,
+                params.deadline,
+                params.v,
+                params.r,
+                params.s
+            )
+        {} catch {}
+    }
+
     // Deposit WBTC
     function depositWbtc(uint256 userSeed, uint256 amount) public {
         uint256 index = userSeed % MAX_USERS;
@@ -102,31 +162,6 @@ contract StrategyEngineHandler is Test {
                 v,
                 r,
                 s
-            )
-        {} catch {}
-    }
-
-    // Deposit USDC
-    function depositUsdc(uint256 userSeed, uint256 amount) public {
-        uint256 index = userSeed % MAX_USERS;
-        address user = users[index];
-        if (user == address(0)) return;
-
-        // Constraint amount in a reasonable range, ensuring it does not exceed user balance
-        uint256 userBalance = IERC20(usdc).balanceOf(user);
-        uint256 maxAmount = userBalance < 1000e6 ? userBalance : 1000e6;
-        amount = bound(amount, 1, maxAmount);
-
-        vm.prank(user);
-        try
-            engine.deposit(
-                StrategyEngine.TokenType.USDC,
-                amount,
-                0, // referralCode
-                0, // deadline (not needed)
-                0, // v (not needed)
-                bytes32(0), // r (not needed)
-                bytes32(0) // s (not needed)
             )
         {} catch {}
     }
