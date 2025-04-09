@@ -65,7 +65,7 @@ contract StrategyEngineTest is Test {
     event Deposited(
         bytes32 indexed depositId,
         address indexed user,
-        StrategyEngine.TokenType tokenType,
+        StrategyLib.TokenType tokenType,
         uint256 amount,
         uint256 borrowAmount,
         uint256 timestamp
@@ -197,12 +197,12 @@ contract StrategyEngineTest is Test {
         );
 
         // Verify deposit record
-        StrategyEngine.DepositRecord[] memory records = engine.getUserDepositRecords(user);
+        StrategyLib.DepositRecord[] memory records = engine.getUserDepositRecords(user);
         assertEq(records.length, 1, "Should have one deposit record");
         assertEq(records[0].depositId, expectedDepositId, "Incorrect depositId");
         assertEq(
             uint8(records[0].tokenType),
-            uint8(StrategyEngine.TokenType.WBTC),
+            uint8(StrategyLib.TokenType.WBTC),
             "Incorrect token type"
         );
         assertEq(records[0].amount, amount, "Incorrect record amount");
@@ -231,7 +231,7 @@ contract StrategyEngineTest is Test {
         );
 
         vm.startPrank(_user);
-        engine.deposit(StrategyEngine.TokenType.USDC, amount, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.USDC, amount, 0, deadline, v, r, s);
         vm.stopPrank();
 
         return beforeBalance;
@@ -272,11 +272,11 @@ contract StrategyEngineTest is Test {
         // );
 
         // Verify deposit record
-        StrategyEngine.DepositRecord[] memory records = engine.getUserDepositRecords(user);
+        StrategyLib.DepositRecord[] memory records = engine.getUserDepositRecords(user);
         assertEq(records.length, 1, "Should have one deposit record");
         assertEq(
             uint8(records[0].tokenType),
-            uint8(StrategyEngine.TokenType.USDC),
+            uint8(StrategyLib.TokenType.USDC),
             "Incorrect token type"
         );
         assertEq(records[0].amount, amount, "Incorrect record amount");
@@ -287,7 +287,7 @@ contract StrategyEngineTest is Test {
     function test_RevertWhen_DepositZeroAmount() public {
         vm.expectRevert(StrategyEngine.StrategyEngine__InvalidAmount.selector);
         vm.prank(user);
-        engine.deposit(StrategyEngine.TokenType.USDC, 0, 0, 0, 0, bytes32(0), bytes32(0));
+        engine.deposit(StrategyLib.TokenType.USDC, 0, 0, 0, 0, bytes32(0), bytes32(0));
     }
 
     function test_DepositWithExactBalance() public {
@@ -308,7 +308,7 @@ contract StrategyEngineTest is Test {
         deal(address(usdc), user, amount);
 
         // Deposit exact amount
-        engine.deposit(StrategyEngine.TokenType.USDC, amount, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.USDC, amount, 0, deadline, v, r, s);
 
         // Verify balance is zero
         assertEq(IERC20(usdc).balanceOf(user), 0, "User balance should be zero");
@@ -482,7 +482,7 @@ contract StrategyEngineTest is Test {
         );
 
         vm.prank(user);
-        engine.deposit(StrategyEngine.TokenType.WBTC, depositAmount, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.WBTC, depositAmount, 0, deadline, v, r, s);
 
         (, , uint256 totalBorrows, ) = engine.getUserTotals(user);
 
@@ -619,8 +619,8 @@ contract StrategyEngineTest is Test {
         deal(usdc, address(engine), repayAmount);
 
         // Create repay info array
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: repayAmount});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](1);
+        repayInfos[0] = StrategyLib.RepayInfo({user: user, amount: repayAmount});
 
         // Execute repay
         vm.prank(DEPLOYER);
@@ -634,8 +634,8 @@ contract StrategyEngineTest is Test {
     function test_RepayBorrow_ZeroAmount() public {
         vm.startPrank(DEPLOYER);
         // Create repay info array
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: 0});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](1);
+        repayInfos[0] = StrategyLib.RepayInfo({user: user, amount: 0});
 
         vm.expectRevert(StrategyEngine__InvalidAmount.selector);
         engine.repayBorrowBatch(repayInfos);
@@ -646,8 +646,8 @@ contract StrategyEngineTest is Test {
         vm.startPrank(DEPLOYER);
         address noPositionUser = makeAddr("noPositionUser");
         // Create repay info array
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: noPositionUser, amount: 1e6});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](1);
+        repayInfos[0] = StrategyLib.RepayInfo({user: noPositionUser, amount: 1e6});
 
         vm.expectRevert(StrategyEngine__NoUserPosition.selector);
         engine.repayBorrowBatch(repayInfos);
@@ -659,8 +659,8 @@ contract StrategyEngineTest is Test {
         _depositWbtcWithPermit(user, depositAmount, USER_PRIVATE_KEY);
 
         // Create repay info array
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: 0});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](1);
+        repayInfos[0] = StrategyLib.RepayInfo({user: user, amount: 0});
 
         vm.expectRevert(StrategyEngine.StrategyEngine__InvalidAmount.selector);
         vm.startPrank(DEPLOYER);
@@ -684,9 +684,9 @@ contract StrategyEngineTest is Test {
         (, , uint256 totalBorrows2, ) = engine.getUserTotals(user2);
 
         // Create repay info array
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](2);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: user, amount: totalBorrows1});
-        repayInfos[1] = StrategyEngine.RepayInfo({user: user2, amount: totalBorrows2});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](2);
+        repayInfos[0] = StrategyLib.RepayInfo({user: user, amount: totalBorrows1});
+        repayInfos[1] = StrategyLib.RepayInfo({user: user2, amount: totalBorrows2});
 
         // Execute repay
         vm.prank(DEPLOYER);
@@ -718,8 +718,8 @@ contract StrategyEngineTest is Test {
 
         // Repay borrowed amount
         vm.startPrank(DEPLOYER);
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: user2, amount: totalBorrows});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](1);
+        repayInfos[0] = StrategyLib.RepayInfo({user: user2, amount: totalBorrows});
         engine.repayBorrowBatch(repayInfos);
         vm.stopPrank();
 
@@ -771,7 +771,11 @@ contract StrategyEngineTest is Test {
         address userPosition = engine.getUserPositionAddress(user2);
 
         // Calculate repay amount
-        uint256 repayAmount = engine.calculateRepayAmount(address(usdc), userPosition);
+        uint256 repayAmount = StrategyLib.calculateRepayAmount(
+            address(usdc),
+            userPosition,
+            engine.aaveProtocolDataProvider()
+        );
 
         // Verify we got a meaningful amount
         assertGt(repayAmount, 0, "Repay amount should be greater than zero");
@@ -786,7 +790,7 @@ contract StrategyEngineTest is Test {
         _depositUsdc(user2, USDC_AMOUNT, user2PrivateKey);
 
         // Get deposit records
-        StrategyEngine.DepositRecord[] memory records = engine.getUserDepositRecords(user2);
+        StrategyLib.DepositRecord[] memory records = engine.getUserDepositRecords(user2);
 
         // Verify we got the records
         assertEq(records.length, 2, "Should have 2 deposit records");
@@ -823,15 +827,15 @@ contract StrategyEngineTest is Test {
         );
 
         // Test token address getters
-        assertEq(engine.getWBTCAddress(), wbtc, "WBTC address should match");
-        assertEq(engine.getUSDCAddress(), usdc, "USDC address should match");
+        assertEq(address(engine.wbtc()), wbtc, "WBTC address should match");
+        assertEq(address(engine.usdc()), usdc, "USDC address should match");
+        assertEq(address(engine.aavePool()), address(aavePool), "Aave pool address should match");
         assertEq(
-            address(engine.getAavePoolAddress()),
-            address(aavePool),
-            "Aave pool address should match"
+            address(engine.aaveOracle()),
+            address(aaveOracle),
+            "Aave oracle address should match"
         );
-        assertEq(engine.getAaveOracleAddress(), aaveOracle, "Aave oracle address should match");
-        assertEq(engine.getVaultAddress(), address(vault), "Vault address should match");
+        assertEq(address(engine.vault()), address(vault), "Vault address should match");
     }
 
     struct DepositTestInfo {
@@ -961,7 +965,7 @@ contract StrategyEngineTest is Test {
         );
 
         vm.startPrank(_user);
-        engine.deposit(StrategyEngine.TokenType.WBTC, amount, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.WBTC, amount, 0, deadline, v, r, s);
         vm.stopPrank();
 
         (, , borrowAmount, ) = engine.getUserTotals(_user);

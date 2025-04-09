@@ -11,6 +11,7 @@ import {DeployScript} from "../../script/Deploy.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {IStrategyEngine} from "../../src/interfaces/IStrategyEngine.sol";
 import {IAaveOracle} from "../../src/interfaces/aave/IAaveOracle.sol";
+import {StrategyLib} from "../../src/libraries/StrategyLib.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
@@ -125,7 +126,7 @@ contract StrategyEngineFuzzTest is Test {
 
         vm.prank(user);
         engine.deposit(
-            StrategyEngine.TokenType.WBTC,
+            StrategyLib.TokenType.WBTC,
             amount,
             0, // referralCode
             deadline,
@@ -149,7 +150,7 @@ contract StrategyEngineFuzzTest is Test {
             deadline,
             userPrivateKeys[user]
         );
-        engine.deposit(StrategyEngine.TokenType.USDC, amount, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.USDC, amount, 0, deadline, v, r, s);
         vm.stopPrank();
     }
 

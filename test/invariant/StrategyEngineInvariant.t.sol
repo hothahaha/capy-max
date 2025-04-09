@@ -12,6 +12,7 @@ import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {IStrategyEngine} from "../../src/interfaces/IStrategyEngine.sol";
 import {IAaveOracle} from "../../src/interfaces/aave/IAaveOracle.sol";
 import {StrategyEngineHandler} from "./StrategyEngineHandler.sol";
+import {StrategyLib} from "../../src/libraries/StrategyLib.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
@@ -72,13 +73,13 @@ contract StrategyEngineInvariantTest is StdInvariant, Test {
             // If user has no deposits, skip check
             if (totalWbtc == 0 && totalUsdc == 0) continue;
 
-            StrategyEngine.DepositRecord[] memory records = engine.getUserDepositRecords(user);
+            StrategyLib.DepositRecord[] memory records = engine.getUserDepositRecords(user);
 
             uint256 sumWbtc = 0;
             uint256 sumUsdc = 0;
 
             for (uint256 j = 0; j < records.length; j++) {
-                if (records[j].tokenType == StrategyEngine.TokenType.WBTC) {
+                if (records[j].tokenType == StrategyLib.TokenType.WBTC) {
                     sumWbtc += records[j].amount;
                 } else {
                     sumUsdc += records[j].amount;

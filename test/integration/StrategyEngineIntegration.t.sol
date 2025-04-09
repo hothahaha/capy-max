@@ -11,6 +11,7 @@ import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {IStrategyEngine} from "../../src/interfaces/IStrategyEngine.sol";
 import {IAaveOracle} from "../../src/interfaces/aave/IAaveOracle.sol";
 import {ISafe} from "../../src/interfaces/safe/ISafe.sol";
+import {StrategyLib} from "../../src/libraries/StrategyLib.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
@@ -149,7 +150,7 @@ contract StrategyEngineIntegrationTest is Test {
         // Execute deposit
         vm.prank(user2);
         engine.deposit(
-            StrategyEngine.TokenType.USDC,
+            StrategyLib.TokenType.USDC,
             USDC_AMOUNT,
             0, // referralCode
             deadline,
@@ -187,7 +188,7 @@ contract StrategyEngineIntegrationTest is Test {
         );
 
         vm.prank(user1);
-        engine.deposit(StrategyEngine.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
 
         // User 2 deposits USDC
         uint256 nonce2 = IERC20Permit(usdc).nonces(user2);
@@ -202,7 +203,7 @@ contract StrategyEngineIntegrationTest is Test {
         );
 
         vm.prank(user2);
-        engine.deposit(StrategyEngine.TokenType.USDC, USDC_AMOUNT, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.USDC, USDC_AMOUNT, 0, deadline, v, r, s);
 
         // User 3 deposits WBTC
         uint256 nonce3 = IERC20Permit(wbtc).nonces(user3);
@@ -217,14 +218,12 @@ contract StrategyEngineIntegrationTest is Test {
         );
 
         vm.prank(user3);
-        engine.deposit(StrategyEngine.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
 
         // Simulate BTC price increase
-        uint256 originalPrice = IAaveOracle(engine.getAaveOracleAddress()).getAssetPrice(
-            address(wbtc)
-        );
+        uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
         vm.mockCall(
-            engine.getAaveOracleAddress(),
+            address(engine.aaveOracle()),
             abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(wbtc)),
             abi.encode(originalPrice * 2)
         );
@@ -254,8 +253,8 @@ contract StrategyEngineIntegrationTest is Test {
 
         // Repay borrowed amount
         vm.startPrank(DEPLOYER);
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: user2, amount: totalBorrows});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](1);
+        repayInfos[0] = StrategyLib.RepayInfo({user: user2, amount: totalBorrows});
         engine.repayBorrowBatch(repayInfos);
         vm.stopPrank();
 
@@ -301,7 +300,7 @@ contract StrategyEngineIntegrationTest is Test {
             );
 
             vm.prank(user);
-            engine.deposit(StrategyEngine.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+            engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
         }
 
         // Fast forward time
@@ -370,8 +369,8 @@ contract StrategyEngineIntegrationTest is Test {
 
         // Repay borrowed amount
         vm.startPrank(DEPLOYER);
-        StrategyEngine.RepayInfo[] memory repayInfos = new StrategyEngine.RepayInfo[](1);
-        repayInfos[0] = StrategyEngine.RepayInfo({user: user2, amount: totalBorrows});
+        StrategyLib.RepayInfo[] memory repayInfos = new StrategyLib.RepayInfo[](1);
+        repayInfos[0] = StrategyLib.RepayInfo({user: user2, amount: totalBorrows});
         engine.repayBorrowBatch(repayInfos);
         vm.stopPrank();
 
@@ -384,7 +383,7 @@ contract StrategyEngineIntegrationTest is Test {
     function testFailWithdrawTooMuch() public {
         // User 2 deposits USDC
         vm.prank(user2);
-        engine.deposit(StrategyEngine.TokenType.USDC, USDC_AMOUNT, 0, 0, 0, bytes32(0), bytes32(0));
+        engine.deposit(StrategyLib.TokenType.USDC, USDC_AMOUNT, 0, 0, 0, bytes32(0), bytes32(0));
 
         // Prepare withdrawal parameters with excessive amount
         address[] memory users = new address[](1);
@@ -432,7 +431,7 @@ contract StrategyEngineIntegrationTest is Test {
         );
 
         vm.prank(user1);
-        engine.deposit(StrategyEngine.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
 
         // Get initial borrow amount
         (, , uint256 initialBorrowAmount, ) = engine.getUserTotals(user1);
@@ -516,7 +515,7 @@ contract StrategyEngineIntegrationTest is Test {
             );
 
             vm.prank(user);
-            engine.deposit(StrategyEngine.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+            engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
 
             // Record borrow amount
             (, , userBorrows[i], ) = engine.getUserTotals(user);
@@ -571,7 +570,7 @@ contract StrategyEngineIntegrationTest is Test {
         );
 
         vm.prank(user1);
-        engine.deposit(StrategyEngine.TokenType.WBTC, minDeposit, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.WBTC, minDeposit, 0, deadline, v, r, s);
 
         // Verify minimum deposit is processed
         (uint256 wbtcBalance, , , ) = engine.getUserTotals(user1);
@@ -593,7 +592,7 @@ contract StrategyEngineIntegrationTest is Test {
         );
 
         vm.prank(user2);
-        engine.deposit(StrategyEngine.TokenType.WBTC, maxDeposit, 0, deadline, v, r, s);
+        engine.deposit(StrategyLib.TokenType.WBTC, maxDeposit, 0, deadline, v, r, s);
 
         // Verify maximum deposit is processed
         (wbtcBalance, , , ) = engine.getUserTotals(user2);
@@ -636,7 +635,7 @@ contract StrategyEngineIntegrationTest is Test {
         // Execute deposit
         vm.prank(user);
         engine.deposit(
-            StrategyEngine.TokenType.WBTC,
+            StrategyLib.TokenType.WBTC,
             amount,
             0, // referralCode
             deadline,
@@ -644,6 +643,99 @@ contract StrategyEngineIntegrationTest is Test {
             r,
             s
         );
+    }
+
+    /**
+     * @notice Test emergency WBTC withdrawal functionality
+     */
+    function testEmergencyWbtcWithdrawal() public {
+        // Setup: Transfer some WBTC to the engine contract
+        uint256 lockedAmount = 0.5e8; // 0.5 WBTC
+        deal(wbtc, address(engine), lockedAmount);
+
+        // Record initial balances
+        uint256 initialEngineBalance = IERC20(wbtc).balanceOf(address(engine));
+        uint256 initialUser1Balance = IERC20(wbtc).balanceOf(user1);
+        uint256 initialUser2Balance = IERC20(wbtc).balanceOf(user2);
+
+        // Prepare withdrawal info
+        IStrategyEngine.EmergencyWithdrawalInfo[]
+            memory withdrawalInfos = new IStrategyEngine.EmergencyWithdrawalInfo[](2);
+        withdrawalInfos[0] = IStrategyEngine.EmergencyWithdrawalInfo({
+            user: user1,
+            amount: 0.3e8 // 0.3 WBTC
+        });
+        withdrawalInfos[1] = IStrategyEngine.EmergencyWithdrawalInfo({
+            user: user2,
+            amount: 0.2e8 // 0.2 WBTC
+        });
+
+        // Test: Non-signer cannot execute emergency withdrawal
+        vm.prank(user1);
+        vm.expectRevert(StrategyEngine.StrategyEngine__NotSafeSigner.selector);
+        engine.emergencyWbtcWithdrawal(withdrawalInfos);
+
+        // Test: SafeSigner can execute emergency withdrawal
+        vm.prank(DEPLOYER);
+        uint256[] memory withdrawnAmounts = engine.emergencyWbtcWithdrawal(withdrawalInfos);
+
+        // Verify withdrawn amounts
+        assertEq(withdrawnAmounts[0], 0.3e8, "First withdrawal amount incorrect");
+        assertEq(withdrawnAmounts[1], 0.2e8, "Second withdrawal amount incorrect");
+
+        // Verify final balances
+        assertEq(
+            IERC20(wbtc).balanceOf(address(engine)),
+            initialEngineBalance - lockedAmount,
+            "Engine balance incorrect"
+        );
+        assertEq(
+            IERC20(wbtc).balanceOf(user1),
+            initialUser1Balance + 0.3e8,
+            "User1 balance incorrect"
+        );
+        assertEq(
+            IERC20(wbtc).balanceOf(user2),
+            initialUser2Balance + 0.2e8,
+            "User2 balance incorrect"
+        );
+    }
+
+    /**
+     * @notice Test emergency WBTC withdrawal with insufficient balance
+     */
+    function testEmergencyWbtcWithdrawalInsufficientBalance() public {
+        // Setup: Transfer small amount of WBTC to the engine contract
+        uint256 lockedAmount = 0.1e8; // 0.1 WBTC
+        deal(wbtc, address(engine), lockedAmount);
+
+        // Prepare withdrawal info with amount larger than balance
+        IStrategyEngine.EmergencyWithdrawalInfo[]
+            memory withdrawalInfos = new IStrategyEngine.EmergencyWithdrawalInfo[](1);
+        withdrawalInfos[0] = IStrategyEngine.EmergencyWithdrawalInfo({
+            user: user1,
+            amount: 0.2e8 // 0.2 WBTC
+        });
+
+        // Test: Should revert with insufficient balance
+        vm.prank(DEPLOYER);
+        vm.expectRevert(StrategyEngine.StrategyEngine__InsufficientContractBalance.selector);
+        engine.emergencyWbtcWithdrawal(withdrawalInfos);
+    }
+
+    /**
+     * @notice Test emergency WBTC withdrawal with zero amount
+     */
+    function testEmergencyWbtcWithdrawalZeroAmount() public {
+        // Prepare withdrawal info with zero amount
+        IStrategyEngine.EmergencyWithdrawalInfo[]
+            memory withdrawalInfos = new IStrategyEngine.EmergencyWithdrawalInfo[](1);
+        withdrawalInfos[0] = IStrategyEngine.EmergencyWithdrawalInfo({user: user1, amount: 0});
+
+        // Test: Should revert with invalid amount
+        vm.prank(DEPLOYER);
+        vm.expectRevert(StrategyEngine.StrategyEngine__InvalidAmount.selector);
+        engine.emergencyWbtcWithdrawal(withdrawalInfos);
     }
 }
 

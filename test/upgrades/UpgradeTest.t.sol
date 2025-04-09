@@ -260,7 +260,7 @@ contract UpgradeTest is Test {
         // Get initial state
         uint256 initialPlatformFee = engine.getPlatformFee();
         uint256 initialDefaultLiquidationThreshold = engine.getDefaultLiquidationThreshold();
-        address initialVaultAddress = engine.getVaultAddress();
+        address initialVaultAddress = address(engine.vault());
 
         // 1. Deploy new implementation
         StrategyEngineV2 engineV2Implementation = new StrategyEngineV2();
@@ -290,7 +290,7 @@ contract UpgradeTest is Test {
             "Liquidation threshold should be preserved after upgrade"
         );
         assertEq(
-            upgradedEngine.getVaultAddress(),
+            address(upgradedEngine.vault()),
             initialVaultAddress,
             "Vault address should be preserved after upgrade"
         );

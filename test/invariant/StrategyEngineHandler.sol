@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Test, console} from "forge-std/Test.sol";
 import {StrategyEngine} from "../../src/StrategyEngine.sol";
 import {IAaveOracle} from "../../src/interfaces/aave/IAaveOracle.sol";
+import {StrategyLib} from "../../src/libraries/StrategyLib.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
@@ -119,7 +120,7 @@ contract StrategyEngineHandler is Test {
         vm.prank(user);
         try
             engine.deposit(
-                StrategyEngine.TokenType.USDC,
+                StrategyLib.TokenType.USDC,
                 params.amount,
                 0,
                 params.deadline,
@@ -155,7 +156,7 @@ contract StrategyEngineHandler is Test {
         vm.prank(user);
         try
             engine.deposit(
-                StrategyEngine.TokenType.WBTC,
+                StrategyLib.TokenType.WBTC,
                 amount,
                 0, // referralCode
                 deadline,
@@ -172,21 +173,21 @@ contract StrategyEngineHandler is Test {
         address user = users[index];
         if (user == address(0)) return;
 
-        StrategyEngine.TokenType tokenType = tokenTypeSeed % 2 == 0
-            ? StrategyEngine.TokenType.WBTC
-            : StrategyEngine.TokenType.USDC;
+        StrategyLib.TokenType tokenType = tokenTypeSeed % 2 == 0
+            ? StrategyLib.TokenType.WBTC
+            : StrategyLib.TokenType.USDC;
 
         // Get user deposit information
         (uint256 totalWbtc, uint256 totalUsdc, uint256 totalBorrows, ) = engine.getUserTotals(user);
 
         // Determine the amount that can be withdrawn
         uint256 maxWithdraw;
-        if (tokenType == StrategyEngine.TokenType.WBTC && totalWbtc > 0) {
+        if (tokenType == StrategyLib.TokenType.WBTC && totalWbtc > 0) {
             // Simulate profit return
             uint256 profit = totalBorrows / 10; // 10% profit
             deal(usdc, address(engine), totalBorrows + profit);
             maxWithdraw = totalBorrows + profit;
-        } else if (tokenType == StrategyEngine.TokenType.USDC && totalUsdc > 0) {
+        } else if (tokenType == StrategyLib.TokenType.USDC && totalUsdc > 0) {
             // Simulate profit return
             uint256 profit = totalUsdc / 10; // 10% profit
             deal(usdc, address(engine), totalUsdc + profit);
@@ -292,7 +293,7 @@ contract StrategyEngineHandler is Test {
     }
 
     function updateLastVaultBalance() public {
-        lastVaultBalance = IERC20(usdc).balanceOf(engine.getVaultAddress());
+        lastVaultBalance = IERC20(usdc).balanceOf(address(engine.vault()));
     }
 
     function getTotalProfit() public view returns (uint256) {
@@ -307,7 +308,7 @@ contract StrategyEngineHandler is Test {
             uint256 totalBorrows,
             uint256 lastDepositTime
         ) = engine.getUserTotals(user);
-        StrategyEngine.DepositRecord[] memory records = engine.getUserDepositRecords(user);
+        StrategyLib.DepositRecord[] memory records = engine.getUserDepositRecords(user);
 
         console.log("User:", user);
         console.log("Total WBTC:", totalWbtc);
