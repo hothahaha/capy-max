@@ -187,14 +187,21 @@ contract StrategyEngine is
     /// @param users Array of user addresses
     /// @param amounts Array of withdrawal amounts
     /// @return profits Array of profits for each user
+    /// @return successes Array of success flags for each user
     function withdrawBatch(
         address[] calldata users,
         uint256[] calldata amounts
-    ) external nonReentrant onlySafeSigner returns (uint256[] memory profits) {
+    )
+        external
+        nonReentrant
+        onlySafeSigner
+        returns (uint256[] memory profits, bool[] memory successes)
+    {
         uint256 length = users.length;
         if (length != amounts.length) revert StrategyEngine__InvalidInput();
 
         profits = new uint256[](length);
+        successes = new bool[](length);
 
         // Calculate total withdrawal amount to check against contract balance
         uint256 totalWithdrawalAmount = 0;
@@ -210,10 +217,16 @@ contract StrategyEngine is
 
         // Process each withdrawal
         for (uint256 i = 0; i < length; i++) {
-            profits[i] = _withdraw(users[i], amounts[i]);
+            try this._withdraw(users[i], amounts[i]) returns (uint256 profit) {
+                profits[i] = profit;
+                successes[i] = true;
+            } catch {
+                profits[i] = 0;
+                successes[i] = false;
+            }
         }
 
-        return profits;
+        return (profits, successes);
     }
 
     /// @notice Create a user position contract
@@ -497,13 +510,12 @@ contract StrategyEngine is
     // Internal Functions
     //--------------------------------------------------------------------------
 
-    /**
-     * @notice Internal function to process a single withdrawal
-     * @param user Address of the user
-     * @param amount Amount to withdraw in USDC
-     * @return userProfit Profit earned by the user
-     */
-    function _withdraw(address user, uint256 amount) internal returns (uint256 userProfit) {
+    /// @notice Internal function to process a single withdrawal
+    /// @param user Address of the user
+    /// @param amount Amount to withdraw in USDC
+    /// @return userProfit Profit earned by the user
+    function _withdraw(address user, uint256 amount) external returns (uint256 userProfit) {
+        require(msg.sender == address(this), "Only callable by StrategyEngine");
         UserState storage state = userStates[user];
         if (state.info.deposits.length == 0) revert StrategyEngine__NoDeposit();
 

@@ -235,7 +235,7 @@ contract StrategyEngineFuzzTest is Test {
 
         // Execute withdraw
         vm.prank(DEPLOYER);
-        uint256[] memory userProfits = engine.withdrawBatch(users, amounts);
+        (uint256[] memory userProfits, ) = engine.withdrawBatch(users, amounts);
 
         // Verify withdraw result
         assertGt(userProfits[0], 0, "User should receive profit");

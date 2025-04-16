@@ -206,7 +206,10 @@ contract StrategyEngineHandler is Test {
         amounts[0] = amount;
 
         vm.prank(DEPLOYER);
-        try engine.withdrawBatch(users, amounts) returns (uint256[] memory userProfits) {
+        try engine.withdrawBatch(users, amounts) returns (
+            uint256[] memory userProfits,
+            bool[] memory /* successes */
+        ) {
             // Record total profit
             if (userProfits.length > 0) {
                 totalProfit += userProfits[0];
