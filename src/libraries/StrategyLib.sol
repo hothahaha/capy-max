@@ -190,8 +190,10 @@ library StrategyLib {
                 aaveProtocolDataProvider
             );
 
+            usdc.approve(address(this), needRepayAmount);
+            usdc.safeTransferFrom(address(this), userPosition, needRepayAmount);
+
             // Repay to Aave
-            usdc.approve(address(aavePool), needRepayAmount);
             uint256 repayedAmount = UserPosition(payable(userPosition)).executeRepay(
                 address(aavePool),
                 address(usdc),

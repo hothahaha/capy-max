@@ -13,8 +13,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IAavePool} from "./interfaces/aave/IAavePool.sol";
 import {IAaveOracle} from "./interfaces/aave/IAaveOracle.sol";
 import {IPoolDataProvider} from "./interfaces/aave/IAaveProtocolDataProvider.sol";
-import {CpToken} from "./tokens/CpToken.sol";
-import {Vault} from "./vault/Vault.sol";
+import {IVault} from "./interfaces/IVault.sol";
 import {UserPosition} from "./UserPosition.sol";
 import {IStrategyEngine} from "./interfaces/IStrategyEngine.sol";
 import {ISafe} from "./interfaces/safe/ISafe.sol";
@@ -68,7 +67,7 @@ contract StrategyEngine is
     IAaveOracle public aaveOracle;
     IPoolDataProvider public aaveProtocolDataProvider;
     ICpToken public cpToken;
-    Vault public vault;
+    IVault public vault;
 
     // User data mappings
     mapping(address => UserState) private userStates;
@@ -150,7 +149,7 @@ contract StrategyEngine is
         aaveOracle = IAaveOracle(params.aaveOracle);
         aaveProtocolDataProvider = IPoolDataProvider(params.aaveProtocolDataProvider);
         cpToken = ICpToken(params.cpToken);
-        vault = Vault(params.vault);
+        vault = IVault(params.vault);
         safeWallet = params.safeWallet;
         defaultLiquidationThreshold = 156;
 

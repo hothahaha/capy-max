@@ -11,7 +11,7 @@ upgrade-dry:
 	forge script ${SCRIPT_STRATEGY_ENGINE_PATH} -vvvv \
 		--rpc-url ${RPC_URL} \
 		--sender ${SENDER} \
-		--private-key ${PRIVATE_KEY} \
+		--private-key ${TESTNET_PRIVATE_KEY} \
 		--sig "run()"
 
 upgrade:
@@ -20,6 +20,6 @@ upgrade:
 		--broadcast \
 		--verify \
 		--sender ${SENDER} \
-		--private-key ${PRIVATE_KEY} \
+		--private-key ${TESTNET_PRIVATE_KEY} \
 		--sig "run()"
 

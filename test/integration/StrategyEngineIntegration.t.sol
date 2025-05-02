@@ -107,6 +107,42 @@ contract StrategyEngineIntegrationTest is Test {
         assertNotEq(userPosition, address(0), "User position should be created");
     }
 
+    function _depositWithPermit(
+        address user,
+        StrategyLib.TokenType tokenType,
+        uint256 amount,
+        uint256 privateKey
+    ) internal {
+        address token = tokenType == StrategyLib.TokenType.WBTC ? wbtc : usdc;
+        uint256 deadline = block.timestamp + 1 days;
+        uint256 nonce = IERC20Permit(token).nonces(user);
+
+        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
+            token,
+            user,
+            address(engine),
+            amount,
+            nonce,
+            deadline,
+            privateKey
+        );
+
+        vm.prank(user);
+        engine.deposit(
+            tokenType,
+            amount,
+            0, // referralCode
+            deadline,
+            v,
+            r,
+            s
+        );
+    }
+
+    function _depositWbtcWithPermit(address user, uint256 amount, uint256 privateKey) internal {
+        _depositWithPermit(user, StrategyLib.TokenType.WBTC, amount, privateKey);
+    }
+
     // Test WBTC deposit process
     function testWbtcDeposit() public {
         uint256 initialWbtcBalance = IERC20(wbtc).balanceOf(user1);
@@ -134,30 +170,9 @@ contract StrategyEngineIntegrationTest is Test {
     // Test USDC deposit process
     function testUsdcDeposit() public {
         uint256 initialUsdcBalance = IERC20(usdc).balanceOf(user2);
-        uint256 deadline = block.timestamp + 1 days;
-
-        // Get permit signature
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            usdc,
-            user2,
-            address(engine),
-            USDC_AMOUNT,
-            IERC20Permit(usdc).nonces(user2),
-            deadline,
-            user2PrivateKey
-        );
 
         // Execute deposit
-        vm.prank(user2);
-        engine.deposit(
-            StrategyLib.TokenType.USDC,
-            USDC_AMOUNT,
-            0, // referralCode
-            deadline,
-            v,
-            r,
-            s
-        );
+        _depositWithPermit(user2, StrategyLib.TokenType.USDC, USDC_AMOUNT, user2PrivateKey);
 
         // Verify user information has been updated
         (, uint256 totalUsdc, uint256 totalBorrows, ) = engine.getUserTotals(user2);
@@ -175,50 +190,13 @@ contract StrategyEngineIntegrationTest is Test {
     // Test multiple users and borrow capacity update
     function testMultipleUsersAndBorrowCapacity() public {
         // User 1 deposits WBTC
-        uint256 deadline = block.timestamp + 1 days;
-        uint256 nonce1 = IERC20Permit(wbtc).nonces(user1);
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            user1,
-            address(engine),
-            WBTC_AMOUNT,
-            nonce1,
-            deadline,
-            user1PrivateKey
-        );
-
-        vm.prank(user1);
-        engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+        _depositWbtcWithPermit(user1, WBTC_AMOUNT, user1PrivateKey);
 
         // User 2 deposits USDC
-        uint256 nonce2 = IERC20Permit(usdc).nonces(user2);
-        (v, r, s) = _getPermitSignature(
-            usdc,
-            user2,
-            address(engine),
-            USDC_AMOUNT,
-            nonce2,
-            deadline,
-            user2PrivateKey
-        );
-
-        vm.prank(user2);
-        engine.deposit(StrategyLib.TokenType.USDC, USDC_AMOUNT, 0, deadline, v, r, s);
+        _depositWithPermit(user2, StrategyLib.TokenType.USDC, USDC_AMOUNT, user2PrivateKey);
 
         // User 3 deposits WBTC
-        uint256 nonce3 = IERC20Permit(wbtc).nonces(user3);
-        (v, r, s) = _getPermitSignature(
-            wbtc,
-            user3,
-            address(engine),
-            WBTC_AMOUNT,
-            nonce3,
-            deadline,
-            user3PrivateKey
-        );
-
-        vm.prank(user3);
-        engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+        _depositWbtcWithPermit(user3, WBTC_AMOUNT, user3PrivateKey);
 
         // Simulate BTC price increase
         uint256 originalPrice = engine.aaveOracle().getAssetPrice(address(wbtc));
@@ -338,6 +316,7 @@ contract StrategyEngineIntegrationTest is Test {
         uint256 deadline,
         uint256 privateKey
     ) internal view returns (uint8 v, bytes32 r, bytes32 s) {
+        // Mock the permit signature
         bytes32 PERMIT_TYPEHASH = keccak256(
             "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
         );
@@ -380,10 +359,9 @@ contract StrategyEngineIntegrationTest is Test {
     }
 
     // Test extreme case: attempt to withdraw more than the deposit amount
-    function testFailWithdrawTooMuch() public {
+    function test_RevertWhen_WithdrawTooMuch() public {
         // User 2 deposits USDC
-        vm.prank(user2);
-        engine.deposit(StrategyLib.TokenType.USDC, USDC_AMOUNT, 0, 0, 0, bytes32(0), bytes32(0));
+        _depositWithPermit(user2, StrategyLib.TokenType.USDC, USDC_AMOUNT, user2PrivateKey);
 
         // Prepare withdrawal parameters with excessive amount
         address[] memory users = new address[](1);
@@ -391,10 +369,13 @@ contract StrategyEngineIntegrationTest is Test {
         users[0] = user2;
         amounts[0] = USDC_AMOUNT * 2;
 
+        // Deal USDC to engine contract
+        deal(usdc, address(engine), USDC_AMOUNT);
+
         // Try to withdraw more than the deposit amount
-        vm.prank(user2);
+        vm.prank(DEPLOYER);
+        vm.expectRevert(StrategyEngine.StrategyEngine__InsufficientContractBalance.selector);
         engine.withdrawBatch(users, amounts);
-        // Should fail because the amount exceeds the deposit
     }
 
     // Test update platform fee
@@ -501,21 +482,7 @@ contract StrategyEngineIntegrationTest is Test {
             IERC20(wbtc).approve(address(engine), type(uint256).max);
 
             // Deposit
-            uint256 deadline = block.timestamp + 1 days;
-            uint256 nonce = IERC20Permit(wbtc).nonces(user);
-
-            (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-                wbtc,
-                user,
-                address(engine),
-                WBTC_AMOUNT,
-                nonce,
-                deadline,
-                userPrivateKey
-            );
-
-            vm.prank(user);
-            engine.deposit(StrategyLib.TokenType.WBTC, WBTC_AMOUNT, 0, deadline, v, r, s);
+            _depositWithPermit(user, StrategyLib.TokenType.WBTC, WBTC_AMOUNT, userPrivateKey);
 
             // Record borrow amount
             (, , userBorrows[i], ) = engine.getUserTotals(user);
@@ -557,20 +524,7 @@ contract StrategyEngineIntegrationTest is Test {
         uint256 minDeposit = 1; // 1 satoshi
         deal(wbtc, user1, minDeposit);
 
-        uint256 deadline = block.timestamp + 1 days;
-        uint256 nonce = IERC20Permit(wbtc).nonces(user1);
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            user1,
-            address(engine),
-            minDeposit,
-            nonce,
-            deadline,
-            user1PrivateKey
-        );
-
-        vm.prank(user1);
-        engine.deposit(StrategyLib.TokenType.WBTC, minDeposit, 0, deadline, v, r, s);
+        _depositWithPermit(user1, StrategyLib.TokenType.WBTC, minDeposit, user1PrivateKey);
 
         // Verify minimum deposit is processed
         (uint256 wbtcBalance, , , ) = engine.getUserTotals(user1);
@@ -580,19 +534,7 @@ contract StrategyEngineIntegrationTest is Test {
         uint256 maxDeposit = 22e8; // 22 BTC
         deal(wbtc, user2, maxDeposit);
 
-        nonce = IERC20Permit(wbtc).nonces(user2);
-        (v, r, s) = _getPermitSignature(
-            wbtc,
-            user2,
-            address(engine),
-            maxDeposit,
-            nonce,
-            deadline,
-            user2PrivateKey
-        );
-
-        vm.prank(user2);
-        engine.deposit(StrategyLib.TokenType.WBTC, maxDeposit, 0, deadline, v, r, s);
+        _depositWithPermit(user2, StrategyLib.TokenType.WBTC, maxDeposit, user2PrivateKey);
 
         // Verify maximum deposit is processed
         (wbtcBalance, , , ) = engine.getUserTotals(user2);
@@ -614,35 +556,6 @@ contract StrategyEngineIntegrationTest is Test {
         engine.createUserPosition();
         address user2Position = engine.getUserPositionAddress(user2);
         assertNotEq(user2Position, address(0), "User2 position should be created");
-    }
-
-    function _depositWbtcWithPermit(address user, uint256 amount, uint256 privateKey) internal {
-        // Simulate permit signature
-        uint256 deadline = block.timestamp + 1 days;
-        uint256 nonce = IERC20Permit(wbtc).nonces(user);
-
-        // Use the correct signature generation method
-        (uint8 v, bytes32 r, bytes32 s) = _getPermitSignature(
-            wbtc,
-            user,
-            address(engine),
-            amount,
-            nonce,
-            deadline,
-            privateKey
-        );
-
-        // Execute deposit
-        vm.prank(user);
-        engine.deposit(
-            StrategyLib.TokenType.WBTC,
-            amount,
-            0, // referralCode
-            deadline,
-            v,
-            r,
-            s
-        );
     }
 
     /**
